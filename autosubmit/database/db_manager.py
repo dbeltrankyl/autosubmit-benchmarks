@@ -28,6 +28,10 @@ from sqlalchemy.schema import CreateTable, CreateSchema, DropTable
 from autosubmit.config.basicconfig import BasicConfig
 from autosubmit.database import session
 from autosubmit.database.tables import get_table_from_name
+from autosubmit.log.log import Log
+
+if TYPE_CHECKING:
+    from autosubmit.database.tables import Table
 
 if TYPE_CHECKING:
     from autosubmit.database.tables import Table
