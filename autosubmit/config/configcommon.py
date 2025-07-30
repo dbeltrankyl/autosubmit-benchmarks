@@ -616,7 +616,7 @@ class AutosubmitConfig(object):
         """
         for job in data_fixed.get("JOBS", {}):
             wallclock = data_fixed["JOBS"][job].get("WALLCLOCK", "")
-            if wallclock and re.match(r'^\d{2}:\d{2}:\d{2}$', wallclock):
+            if wallclock and re.match(r'^\\d{2}:\\d{2}:\\d{2}$', wallclock):
                 # Truncate SS to "HH:MM"
                 Log.warning(
                     f"Wallclock {wallclock} is in HH:MM:SS format. Autosubmit doesn't suppport ( yet ) the seconds. Truncating to HH:MM")
@@ -1160,7 +1160,7 @@ class AutosubmitConfig(object):
             # Pattern to search a string starting with % and ending with % allowing the chars [],._ to exist in the middle
             dynamic_var_pattern = '%[a-zA-Z0-9_.-]*%'
             # Pattern to search a string starting with %^ and ending with %
-            special_dynamic_var_pattern = '%\^[a-zA-Z0-9_.-]*%'
+            special_dynamic_var_pattern = '%\\^[a-zA-Z0-9_.-]*%'
 
             if not isinstance(val, collections.abc.Mapping) and re.search(dynamic_var_pattern, str(val),
                                                                           flags=re.IGNORECASE) is not None:
@@ -2876,7 +2876,7 @@ class AutosubmitConfig(object):
 
     @staticmethod
     def is_valid_mail_address(mail_address):
-        if re.match('^[_a-z0-9-]+(\.[_a-z0-9-]+)*@[a-z0-9-]+(\.[a-z0-9-]+)*(\.[a-z]{2,4})$', mail_address,
+        if re.match('^[_a-z0-9-]+(\\.[_a-z0-9-]+)*@[a-z0-9-]+(\\.[a-z0-9-]+)*(\\.[a-z]{2,4})$', mail_address,
                     flags=re.IGNORECASE):
             return True
         else:
