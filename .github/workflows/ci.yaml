@@ -293,11 +293,11 @@ jobs:
       - name: Collect docker logs on failure
         if: failure()
         run: |
-          # pick the first Docker name in the list
-          docker_name="$(docker ps --format="{{.Names}}")"
-          # copy back the remote cylc-run dir
-          docker exec $(docker ps --format="{{.Names}}") bash -c "mkdir -p /app/autosubmit/extract/; cp -f -r /app/autosubmit/experiments/* /app/autosubmit/extract"
-          docker cp ${docker_name}:/app/autosubmit/extract/ ./experiment_data_log/
+          docker run -h slurmctld -p 2222:2222 --name slurm-container autosubmit/slurm-openssh-container:25-05-0-1
+          echo "$( docker exec slurm-container bash -c "mkdir -p /app/autosubmit/extract/; cp -f -r /app/autosubmit/experiments/* /app/autosubmit/extract" )"
+          
+          docker exec slurm-container bash -c "mkdir -p /app/autosubmit/extract/; cp -f -r /app/autosubmit/experiments/* /app/autosubmit/extract"
+          docker cp slurm-container:/app/autosubmit/extract/ ./experiment_data_log/
 
       - name: Tar logs
         if: failure()
