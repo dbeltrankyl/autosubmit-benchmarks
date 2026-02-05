@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
   issues: write
   actions: write
@@ -86,13 +86,17 @@ jobs:
         run: |
           pytest -m "${{ steps.determine_test_type.outputs.test_type }}" -n 0 test/integration
 
-      - name: Upload test artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-artifacts-${{ steps.autosubmit_version.outputs.version }}
-          path: |
-            .benchmarks/artifacts
-          retention-days: 7
+      - name: Commit and push test results
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .benchmarks/artifacts
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Add benchmark artifacts for version ${{ steps.autosubmit_version.outputs.version }} (${{ steps.determine_test_type.outputs.test_type }})"
+            git push
+          fi
 
   metrics_markdown:
     needs: metrics
@@ -125,11 +129,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[all]
 
-      - name: Download test artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: test-artifacts-${{ needs.metrics.outputs.version }}
-
       - name: Generate markdown summary
         run: |
           python .benchmarks/generate_markdown.py --version "${{ needs.metrics.outputs.version }}"
@@ -149,7 +148,7 @@ jobs:
             const fs = require('fs');
             const version = '${{ needs.metrics.outputs.version }}';
             const testType = '${{ needs.metrics.outputs.test_type }}';
-            const summaryPath = `.benchmarks/artifacts/summary_${version}_${testType}.md`;
+            const summaryPath = `.benchmarks/artifacts/summary_${version}.md`;
             const summary = fs.readFileSync(summaryPath, 'utf8');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -169,7 +168,7 @@ jobs:
         run: |
             echo "Benchmark Results (Local Run - ${{ needs.metrics.outputs.test_type }})"
             echo "================================"
-            cat .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}_${{ needs.metrics.outputs.test_type }}.md
+            cat .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}.md
             echo ""
 
   metrics_plot:
@@ -191,6 +190,7 @@ jobs:
           repository: ${{ needs.metrics.outputs.head_repo }}
           ref: ${{ needs.metrics.outputs.head_ref }}
           fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -229,7 +229,7 @@ jobs:
             const testType = '${{ needs.metrics.outputs.test_type }}';
             const plotSummaryPath = `.benchmarks/artifacts/summary_${version}.png`;
             const plotSummary = fs.readFileSync(plotSummaryPath, { encoding: 'base64' });
-            const plotUri = `![Plot Results](data:image/png;base64,${plotBase64})`;
+            const plotUri = `![Plot Results](data:image/png;base64,${plotSummary})`;
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
