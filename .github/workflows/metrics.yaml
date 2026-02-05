@@ -51,11 +51,11 @@ jobs:
         run: |
           comment_body="${{ github.event.comment.body }}"
           if [[ "$comment_body" == *"/metrics_full"* ]]; then
-            echo "test_type=asprofilelong" >> "$GITHUB_OUTPUT"
-            echo "Running full profile tests (asprofilelong)"
+            echo "test_type=profilelong" >> "$GITHUB_OUTPUT"
+            echo "Running full profile tests (profilelong)"
           else
-            echo "test_type=asprofile" >> "$GITHUB_OUTPUT"
-            echo "Running quick profile tests (asprofile)"
+            echo "test_type=profile" >> "$GITHUB_OUTPUT"
+            echo "Running quick profile tests (profile)"
           fi
 
       - name: Checkout PR code
