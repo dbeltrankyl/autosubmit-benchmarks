@@ -234,9 +234,9 @@ def export_to_csv(run_id: str, time_taken: Any, memory_consumption: Any, metadat
 
 @pytest.mark.parametrize("members,chunks,splits",
                          [
-                             pytest.param("fc0", "1", "1", marks=[pytest.mark.asprofile, pytest.mark.asprofilelong]),
-                             pytest.param("fc0 fc1 fc2 fc3", "2", "5", marks=[pytest.mark.asprofile, pytest.mark.asprofilelong]),
-                             pytest.param("fc0 fc1 fc2 fc3", "2", "10", marks=[pytest.mark.asprofile, pytest.mark.asprofilelong]),
+                             pytest.param("fc0", "1", "1", marks=[pytest.mark.profile, pytest.mark.profilelong]),
+                             pytest.param("fc0 fc1 fc2 fc3", "2", "5", marks=[pytest.mark.profile, pytest.mark.profilelong]),
+                             pytest.param("fc0 fc1 fc2 fc3", "2", "10", marks=[pytest.mark.profile, pytest.mark.profilelong]),
                          ],
                          ids=[
                              "1member_1chunk_1split",
@@ -260,9 +260,9 @@ def test_autosubmit_create_profile_metrics(tmp_path: Path, autosubmit_exp, gener
 
 @pytest.mark.parametrize("members,chunks,splits",
                          [
-                             pytest.param("fc0", "1", "1", marks=[pytest.mark.asprofile, pytest.mark.asprofilelong]),
-                             pytest.param("fc0 fc1 fc2 fc3", "2", "5", marks=[pytest.mark.asprofile, pytest.mark.asprofilelong]),
-                             pytest.param("fc0 fc1 fc2 fc3", "2", "10", marks=[pytest.mark.asprofilelong]),
+                             pytest.param("fc0", "1", "1", marks=[pytest.mark.profile, pytest.mark.profilelong]),
+                             pytest.param("fc0 fc1 fc2 fc3", "2", "5", marks=[pytest.mark.profile, pytest.mark.profilelong]),
+                             pytest.param("fc0 fc1 fc2 fc3", "2", "10", marks=[pytest.mark.profilelong]),
                          ],
                          ids=[
                              "1member_1chunk_1split",
@@ -284,9 +284,9 @@ def test_autosubmit_run_profile_metrics(tmp_path: Path, autosubmit_exp, general_
 
 @pytest.mark.parametrize("members,chunks,splits",
                          [
-                             pytest.param("fc0", "1", "1", marks=[pytest.mark.asprofile, pytest.mark.asprofilelong]),
-                             pytest.param("fc0 fc1 fc2 fc3", "2", "5", marks=[pytest.mark.asprofile, pytest.mark.asprofilelong]),
-                             pytest.param("fc0 fc1 fc2 fc3", "2", "10", marks=[pytest.mark.asprofile, pytest.mark.asprofilelong]),
+                             pytest.param("fc0", "1", "1", marks=[pytest.mark.profile, pytest.mark.profilelong]),
+                             pytest.param("fc0 fc1 fc2 fc3", "2", "5", marks=[pytest.mark.profile, pytest.mark.profilelong]),
+                             pytest.param("fc0 fc1 fc2 fc3", "2", "10", marks=[pytest.mark.profile, pytest.mark.profilelong]),
                          ],
                          ids=[
                              "1member_1chunk_1split",
@@ -345,8 +345,8 @@ def do_setstatus(as_exp_, fl=None, fc=None, fct=None, ftcs=None, fs=None, ft=Non
     )
 
 
-@pytest.mark.asprofile
-@pytest.mark.asprofilelong
+@pytest.mark.profile
+@pytest.mark.profilelong
 @pytest.mark.parametrize("members,chunks,splits,filter_type",
                          [
                              pytest.param("fc0", "1", "1", "ftcs"),
