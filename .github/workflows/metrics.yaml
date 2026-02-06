@@ -203,11 +203,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[all]
 
-      - name: Download test artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: test-artifacts-${{ needs.metrics.outputs.version }}
-
       - name: Generate plot summary
         run: |
           python .benchmarks/generate_plot.py --version "${{ needs.metrics.outputs.version }}"
