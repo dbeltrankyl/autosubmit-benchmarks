@@ -64,7 +64,10 @@ def plot_data(current_data: pd.DataFrame, previous_data: pd.DataFrame = None, sh
 
 as_version = version("autosubmit")
 
-datasets = load_data(folder)
+datasets = load_data()
 
 # Right now only bars for the last two versions
-plot_data(datasets[0], datasets[1], show=plot)
+if len(datasets) < 2:
+    plot_data(datasets[0], None, show=plot)
+else:
+    plot_data(datasets[0], datasets[1], show=plot)
