@@ -214,7 +214,7 @@ def parse_metrics(as_exp: BasicConfig, run_id: str, tmp_path: Path):
 def export_to_csv(run_id: str, time_taken: Any, memory_consumption: Any, metadata_size: float, db_size: float,
                   total_jobs: int, total_dependencies: int, header: str):
     as_version = version("autosubmit")
-    path = Path(__file__).parent.parent.parent.parent / ".benchmarks" / "artifacts" / f"ref_metrics_{as_version}.csv"
+    path = Path(__file__).parent.parent.parent.parent / ".benchmarks" / "artifacts" / f"performance-metrics-{as_version}.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     if not path.exists():
         with open(path, "w") as file:

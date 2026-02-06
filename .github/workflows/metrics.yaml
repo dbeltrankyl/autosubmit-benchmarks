@@ -21,6 +21,7 @@ jobs:
       contains(github.event.comment.body, '/metrics_full_markdown') ||
       contains(github.event.comment.body, '/metrics_full_plot') ||
       contains(github.event.comment.body, '/metrics') ||
+      contains(github.event.comment.body, '/metrics_upload') ||
       contains(github.event.comment.body, '/metrics_full')
       )
     runs-on: ubuntu-latest
@@ -85,18 +86,24 @@ jobs:
       - name: Run profile tests
         run: |
           pytest -m "${{ steps.determine_test_type.outputs.test_type }}" -n 0 test/integration
+          # rename the file to include the enviroment used for testing
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-metrics-${{ steps.autosubmit_version.outputs.version }}
+          path: .benchmarks/artifacts
+          retention-days: 7
 
       - name: Commit and push test results
+        if: >
+          github.event.issue.pull_request && contains(github.event.comment.body, '/metrics_upload')
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add .benchmarks/artifacts
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Add benchmark artifacts for version ${{ steps.autosubmit_version.outputs.version }} (${{ steps.determine_test_type.outputs.test_type }})"
-            git push
-          fi
+          git commit -m "Add benchmark artifacts for version ${{ steps.autosubmit_version.outputs.version }} (${{ steps.determine_test_type.outputs.test_type }})"
+          git push
 
   metrics_markdown:
     needs: metrics
@@ -128,6 +135,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e .[all]
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: performance-metrics-${{ needs.metrics.outputs.version }}
+      
+      - name: Move and unpack artifacts
+        run: |
+          mkdir -p .benchmarks/artifacts
+          mv performance-metrics-${{ needs.metrics.outputs.version }}/* .benchmarks/artifacts/
+          tar -xzf .benchmarks/artifacts/metrics_${{ needs.metrics.outputs.version }}.tar.gz -C .benchmarks/artifacts/
 
       - name: Generate markdown summary
         run: |
