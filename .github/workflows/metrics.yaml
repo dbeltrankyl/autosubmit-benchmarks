@@ -139,11 +139,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: performance-metrics-${{ needs.metrics.outputs.version }}
-      
-      - name: Unpack artifacts
-        run: |
-          mkdir -p .benchmarks/artifacts
-          tar -xzf performance-metrics-${{ needs.metrics.outputs.version }} -C .benchmarks/artifacts/
+          path: .benchmarks/artifacts
 
       - name: Generate markdown summary
         run: |
@@ -223,11 +219,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: performance-metrics-${{ needs.metrics.outputs.version }}
-
-      - name: Unpack artifacts
-        run: |
-          mkdir -p .benchmarks/artifacts
-          tar -xzf performance-metrics-${{ needs.metrics.outputs.version }} -C .benchmarks/artifacts/
+          path: .benchmarks/artifacts
 
       - name: Generate plot summary
         run: |
