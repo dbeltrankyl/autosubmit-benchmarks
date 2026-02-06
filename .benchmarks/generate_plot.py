@@ -13,7 +13,6 @@ parser.add_argument("--version", type=str, required=False, help="Autosubmit vers
 
 args = parser.parse_args()
 plot = args.plot
-folder = args.artifacts_folder
 
 
 def plot_data(current_data: pd.DataFrame, previous_data: pd.DataFrame = None, show=False) -> plt.Figure:
