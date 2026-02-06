@@ -150,7 +150,7 @@ jobs:
         id: upload_markdown
         with:
           name: summary_${{ needs.metrics.outputs.version }}_${{ needs.metrics.outputs.test_type }}.md
-          path: .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}
+          path: .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}.md
           retention-days: 7
 
       - name: Upload plot artifacts
@@ -158,7 +158,7 @@ jobs:
         id: upload_plot
         with:
           name: summary_${{ needs.metrics.outputs.version }}_${{ needs.metrics.outputs.test_type }}.png
-          path: .benchmarks/artifacts/plot_${{ needs.metrics.outputs.version }}
+          path: .benchmarks/artifacts/plot_${{ needs.metrics.outputs.version }}.png
           retention-days: 7
 
       - name: Comment results
