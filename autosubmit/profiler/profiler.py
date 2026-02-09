@@ -165,7 +165,6 @@ class Profiler:
         :return: The updated report string with growth metrics.
         :rtype: str
         """
-        report = "\n" + _generate_title("Memory, object and file descriptor by iteration") + "\n"
         for i in range(len(self._mem_iteration[1:-1])):
             mem = self._mem_iteration[i]
             obj = self._obj_iteration[i]
@@ -182,20 +181,6 @@ class Profiler:
             report += f"  File Descriptors: {fd}\n"
             report += f"  Loaded jobs: {self._jobs_iteration[i]}\n"
             report += f"  Loaded edges: {self._edges_iteration[i]}\n"
-
-        # Total Growth
-        report += "\n" + _generate_title("Total Growth") + "\n"
-
-        mem_total_grow = self._mem_total_grow
-        mem_unit = 0
-        while mem_total_grow >= 1024 and mem_unit <= len(_UNITS) - 1:
-            mem_unit += 1
-            mem_total_grow /= 1024
-
-        report += f"  Memory Total Growth: {mem_total_grow:.2f} {_UNITS[mem_unit]}\n"
-        report += f"  Object Total Growth: {self._obj_total_grow}\n"
-        report += f"  File Descriptor Total Growth: {self._fd_total_grow}\n"
-
         return report
 
     def _report(self) -> None:
@@ -229,28 +214,32 @@ class Profiler:
         # Generate memory profiling results
 
         if self._mem_grow and self._obj_grow and self._fd_grow:
+            report = "\n" + _generate_title("Memory, object and file descriptor by iteration") + "\n"
             report += self._report_grow()
-        else:
-            mem_total: float = self._mem_final - self._mem_init  # memory in Bytes
-            mem_init = self._mem_init
-            mem_final = self._mem_final
-            unit = 0
-            # reduces the value to its most suitable unit
-            while mem_total >= 1024 and unit <= len(_UNITS) - 1:
-                unit += 1
-                mem_total /= 1024
-            unit = 0
-            while mem_init >= 1024 and unit <= len(_UNITS) - 1:
-                unit += 1
-                mem_init /= 1024
-            unit = 0
-            while mem_final >= 1024 and unit <= len(_UNITS) - 1:
-                unit += 1
-                mem_final /= 1024
-            report += f"\nINITIAL MEMORY: {mem_init:.2f} {_UNITS[unit]}."
-            report += f"\nMEMORY GROW: {mem_total:.2f} {_UNITS[unit]}."
-            report += f"\nFINAL MEMORY: {mem_final:.2f} {_UNITS[unit]}."
+        report += "\n" + _generate_title("Overall Memory, Object and File Descriptor Growth") + "\n"
 
+        mem_total: float = self._mem_final - self._mem_init  # memory in Bytes
+        mem_init = self._mem_init
+        mem_final = self._mem_final
+        unit = 0
+        # reduces the value to its most suitable unit
+        while mem_total >= 1024 and unit <= len(_UNITS) - 1:
+            unit += 1
+            mem_total /= 1024
+        unit = 0
+        while mem_init >= 1024 and unit <= len(_UNITS) - 1:
+            unit += 1
+            mem_init /= 1024
+        unit = 0
+        while mem_final >= 1024 and unit <= len(_UNITS) - 1:
+            unit += 1
+            mem_final /= 1024
+        report += f"\nMEMORY GROW: {mem_total:.2f} {_UNITS[unit]}."
+        if self._obj_grow and self._fd_grow:
+            report += f"\nOBJECTS GROW: {self._obj_total_grow} objects."
+            report += f"\nFILE DESCRIPTORS GROW: {self._fd_total_grow} file descriptors."
+        report += f"\nINITIAL MEMORY: {mem_init:.2f} {_UNITS[unit]}."
+        report += f"\nFINAL MEMORY: {mem_final:.2f} {_UNITS[unit]}."
         report = report.replace('{', '{{').replace('}', '}}')
         Log.info(report)
 
