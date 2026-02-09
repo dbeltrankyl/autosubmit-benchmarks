@@ -218,7 +218,6 @@ class Profiler:
         sort_by = SortKey.CUMULATIVE
         stats = pstats.Stats(self._profiler, stream=stream)  # generate statistics
         stats.strip_dirs().sort_stats(sort_by).print_stats()  # format and save in the stream
-        report = ""
         if self._mem_grow and self._obj_grow and self._fd_grow:
             report = self._report_grow()
         else:
@@ -241,7 +240,7 @@ class Profiler:
                 mem_final /= 1024
 
             # Create and save report
-            report += "\n".join([
+            report = "\n".join([
                 _generate_title("Time & Calls Profiling"),
                 "",
                 stream.getvalue(),
