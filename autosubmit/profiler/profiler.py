@@ -109,17 +109,20 @@ class Profiler:
 
         self._state = ProfilerState.STARTED
         self._profiler.enable()
-        self._mem_init += _get_current_memory()
+        gc.collect()
+        self._mem_init = _get_current_memory()
 
     def iteration_checkpoint(self, loaded_jobs: int, loaded_edges: int):
         """Record metrics at the checkpoint of an iteration."""
+        gc.collect()
         self._mem_iteration.append(_get_current_memory())
         self._obj_iteration.append(_get_current_object_count())
         self._fd_iteration.append(_get_current_open_fds())
         self._jobs_iteration.append(loaded_jobs)
         self._edges_iteration.append(loaded_edges)
 
-        self._mem_iteration[-1] -= sys.getsizeof(self._mem_iteration) + sys.getsizeof(self._obj_iteration) + sys.getsizeof(self._fd_iteration)
+        self._mem_iteration[-1] -= sys.getsizeof(self._mem_iteration) + sys.getsizeof(self._obj_iteration) + sys.getsizeof(self._fd_iteration) + sys.getsizeof(
+            self._jobs_iteration) + sys.getsizeof(self._edges_iteration)
 
     def stop(self) -> None:
         """Finish the profiling process and generate reports.
@@ -130,8 +133,13 @@ class Profiler:
             raise AutosubmitCritical('Cannot stop the profiler because it was not running.', 7074)
 
         self._profiler.disable()
-        self._mem_final += _get_current_memory()
-        self._calculate_grow()
+        if self._mem_iteration:
+            self._mem_init = self._mem_iteration[0]  # Remove the initial memory value from the iteration list
+            self._mem_final = self._mem_iteration[-1]
+            self._calculate_grow()
+        else:
+            self._mem_final = _get_current_memory()
+
         self._report()
         self._state = ProfilerState.STOPPED
 
@@ -210,27 +218,40 @@ class Profiler:
         sort_by = SortKey.CUMULATIVE
         stats = pstats.Stats(self._profiler, stream=stream)  # generate statistics
         stats.strip_dirs().sort_stats(sort_by).print_stats()  # format and save in the stream
-
-        # Generate memory profiling results
-        mem_total: float = self._mem_final - self._mem_init  # memory in Bytes
-        unit = 0
-        # reduces the value to its most suitable unit
-        while mem_total >= 1024 and unit <= len(_UNITS) - 1:
-            unit += 1
-            mem_total /= 1024
-
-        # Create and save report
-        report = "\n".join([
-            _generate_title("Time & Calls Profiling"),
-            "",
-            stream.getvalue(),
-            _generate_title("Memory Profiling"),
-            f"MEMORY CONSUMPTION: {mem_total} {_UNITS[unit]}.",
-            ""
-        ]).replace('{', '{{').replace('}', '}}')  # escape {} so Log can call str.format
-
+        report = ""
         if self._mem_grow and self._obj_grow and self._fd_grow:
-            report += self._report_grow()
+            report = self._report_grow()
+        else:
+            # Generate memory profiling results
+            mem_total: float = self._mem_final - self._mem_init  # memory in Bytes
+            mem_init = self._mem_init
+            mem_final = self._mem_final
+            unit = 0
+            # reduces the value to its most suitable unit
+            while mem_total >= 1024 and unit <= len(_UNITS) - 1:
+                unit += 1
+                mem_total /= 1024
+            unit = 0
+            while mem_init >= 1024 and unit <= len(_UNITS) - 1:
+                unit += 1
+                mem_init /= 1024
+            unit = 0
+            while mem_final >= 1024 and unit <= len(_UNITS) - 1:
+                unit += 1
+                mem_final /= 1024
+
+            # Create and save report
+            report += "\n".join([
+                _generate_title("Time & Calls Profiling"),
+                "",
+                stream.getvalue(),
+                _generate_title("Memory Profiling"),
+                f"INITIAL MEMORY: {mem_init:.2f} {_UNITS[unit]}.",
+                f"MEMORY GROW: {mem_total:.2f} {_UNITS[unit]}.",
+                f"FINAL MEMORY: {mem_final:.2f} {_UNITS[unit]}.",
+                ""
+            ]).replace('{', '{{').replace('}', '}}')  # escape {} so Log can call str.format
+
         Log.info(report)
 
         stats.dump_stats(Path(report_path, f"{self._expid}_profile_{date_time}.prof"))

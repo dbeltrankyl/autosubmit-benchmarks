@@ -2217,6 +2217,7 @@ class Autosubmit:
             from .profiler.profiler import Profiler
             profiler = Profiler(expid)
             profiler.start()
+            profiler.iteration_checkpoint(0,0)
         else:
             profiler = None
 
@@ -2274,8 +2275,6 @@ class Autosubmit:
                 job_list.recover_logs(new_run=True)
                 # Save metadata.
                 as_conf.save()
-                if profile:
-                    profiler.iteration_checkpoint(len(job_list.get_job_list()), len(job_list.graph_dict))
                 while job_list.continue_run():
                     if profile:
                         profiler.iteration_checkpoint(len(job_list.get_job_list()), len(job_list.graph_dict))
