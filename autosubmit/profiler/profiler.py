@@ -212,7 +212,7 @@ class Profiler:
             ""
         ])
         # Generate memory profiling results
-
+        report = ""
         if self._mem_grow and self._obj_grow and self._fd_grow:
             report = "\n" + _generate_title("Memory, object and file descriptor by iteration") + "\n"
             report += self._report_grow()
