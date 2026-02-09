@@ -218,10 +218,19 @@ class Profiler:
         sort_by = SortKey.CUMULATIVE
         stats = pstats.Stats(self._profiler, stream=stream)  # generate statistics
         stats.strip_dirs().sort_stats(sort_by).print_stats()  # format and save in the stream
+
+        # Create and save report
+        report = "\n".join([
+            _generate_title("Time & Calls Profiling"),
+            "",
+            stream.getvalue(),
+            ""
+        ])
+        # Generate memory profiling results
+
         if self._mem_grow and self._obj_grow and self._fd_grow:
-            report = self._report_grow()
+            report += self._report_grow()
         else:
-            # Generate memory profiling results
             mem_total: float = self._mem_final - self._mem_init  # memory in Bytes
             mem_init = self._mem_init
             mem_final = self._mem_final
@@ -238,19 +247,11 @@ class Profiler:
             while mem_final >= 1024 and unit <= len(_UNITS) - 1:
                 unit += 1
                 mem_final /= 1024
+            report += f"\nINITIAL MEMORY: {mem_init:.2f} {_UNITS[unit]}."
+            report += f"\nMEMORY GROW: {mem_total:.2f} {_UNITS[unit]}."
+            report += f"\nFINAL MEMORY: {mem_final:.2f} {_UNITS[unit]}."
 
-            # Create and save report
-            report = "\n".join([
-                _generate_title("Time & Calls Profiling"),
-                "",
-                stream.getvalue(),
-                _generate_title("Memory Profiling"),
-                f"INITIAL MEMORY: {mem_init:.2f} {_UNITS[unit]}.",
-                f"MEMORY GROW: {mem_total:.2f} {_UNITS[unit]}.",
-                f"FINAL MEMORY: {mem_final:.2f} {_UNITS[unit]}.",
-                ""
-            ]).replace('{', '{{').replace('}', '}}')  # escape {} so Log can call str.format
-
+        report = report.replace('{', '{{').replace('}', '}}')
         Log.info(report)
 
         stats.dump_stats(Path(report_path, f"{self._expid}_profile_{date_time}.prof"))
