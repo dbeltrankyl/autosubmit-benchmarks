@@ -16,6 +16,7 @@
 # along with Autosubmit.  If not, see <http://www.gnu.org/licenses/>.
 
 import cProfile
+import gc
 import io
 import os
 import pstats
@@ -33,47 +34,75 @@ _UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
 
 
 class ProfilerState(Enum):
-    """Enumeration of profiler states"""
+    """Enumeration of profiler states.
+
+    Defines the possible states of the profiler lifecycle.
+    """
     STOPPED = "stopped"
     STARTED = "started"
 
 
 class Profiler:
-    """Class to profile the execution of experiments."""
+    """Profile the execution of experiments.
+
+    Tracks time, memory, objects, and file descriptor usage during
+    experiment execution and generates comprehensive profiling reports.
+    """
 
     def __init__(self, expid: str):
+        """Initialize the profiler with an experiment ID.
+
+        :param expid: The experiment identifier.
+        :type expid: str
+        """
         self._profiler = cProfile.Profile()
         self._expid = expid
 
         # Memory profiling variables
-        self._mem_init = 0
-        self._mem_final = 0
+        self._mem_init = 0.0
+        self._mem_final = 0.0
 
         # Error handling
         self._state = ProfilerState.STOPPED
 
-    @property
-    def started(self):
-        """
-        Check if the profiler is in the started state.
+        # Run exclusive iteration profiling variables
 
-        Returns:
-            bool: True if the profiler is in the started state, False otherwise.
+        self._mem_iteration: list = []
+
+        # Object profiling variables
+        self._obj_iteration: list = []
+        self._obj_grow: list = []
+
+        # File descriptor / handle profiling variables
+        self._fd_iteration: list = []
+        self._fd_grow: list = []
+
+        # Workflow stats
+        self._jobs_iteration: list = []
+        self._edges_iteration: list = []
+
+    @property
+    def started(self) -> bool:
+        """Check if the profiler is in the started state.
+
+        :return: True if profiler is started, False otherwise.
+        :rtype: bool
         """
         return self._state == ProfilerState.STARTED
 
     @property
     def stopped(self):
-        """
-        Check if the profiler is in the stopped state.
-
-        Returns:
-            bool: True if the profiler is in the stopped state, False otherwise.
+        """Check if the profiler is in the stopped state.
+        :return: True if profiler is stopped, False otherwise.
+        :rtype: bool
         """
         return self._state == ProfilerState.STOPPED
 
     def start(self) -> None:
-        """Function to start the profiling process."""
+        """Start the profiling process.
+
+        :raises AutosubmitCritical: If the profiler was already started.
+        """
         if self.started:
             raise AutosubmitCritical('The profiling process was already started.', 7074)
 
@@ -81,19 +110,88 @@ class Profiler:
         self._profiler.enable()
         self._mem_init += _get_current_memory()
 
+    def iteration_checkpoint(self, loaded_jobs: int, loaded_edges: int):
+        """Record metrics at the checkpoint of an iteration."""
+        self._mem_iteration.append(_get_current_memory())
+        self._obj_iteration.append(_get_current_object_count())
+        self._fd_iteration.append(_get_current_open_fds())
+        self._jobs_iteration.append(loaded_jobs)
+        self._edges_iteration.append(loaded_edges)
+
     def stop(self) -> None:
-        """Function to finish the profiling process."""
+        """Finish the profiling process and generate reports.
+
+        :raises AutosubmitCritical: If the profiler was not running.
+        """
         if not self.started or self.stopped:
             raise AutosubmitCritical('Cannot stop the profiler because it was not running.', 7074)
 
         self._profiler.disable()
         self._mem_final += _get_current_memory()
+        self._calculate_grow()
         self._report()
         self._state = ProfilerState.STOPPED
 
-    def _report(self) -> None:
-        """Function to print the final report into the stdout, log and filesystem."""
+    def _calculate_grow(self) -> None:
+        """Calculate total growth metrics for objects and file descriptors."""
 
+        # grow by iteration
+        self._mem_grow = [self._mem_iteration[i] - self._mem_iteration[i - 1]
+                          for i in range(1, len(self._mem_iteration))]
+        self._obj_grow = [self._obj_iteration[i] - self._obj_iteration[i - 1]
+                          for i in range(1, len(self._obj_iteration))]
+        self._fd_grow = [self._fd_iteration[i] - self._fd_iteration[i - 1]
+                         for i in range(1, len(self._fd_iteration))]
+
+        # total grow
+        self._mem_total_grow = self._mem_iteration[-1] - self._mem_iteration[0] if self._mem_iteration else 0
+        self._obj_total_grow = self._obj_iteration[-1] - self._obj_iteration[0] if self._obj_iteration else 0
+        self._fd_total_grow = self._fd_iteration[-1] - self._fd_iteration[0] if self._fd_iteration else 0
+
+    def _report_grow(self) -> str:
+        """Append growth metrics to the report.
+
+        :return: The updated report string with growth metrics.
+        :rtype: str
+        """
+        report = "\n" + _generate_title("Memory, object and file descriptor by iteration") + "\n"
+        for i in range(len(self._mem_iteration[1:-1])):
+            mem = self._mem_iteration[i]
+            obj = self._obj_iteration[i]
+            fd = self._fd_iteration[i]
+
+            mem_unit = 0
+            while mem >= 1024 and mem_unit <= len(_UNITS) - 1:
+                mem_unit += 1
+                mem /= 1024
+
+            report += f"Iteration {i + 1}:\n"
+            report += f"  Memory: {mem:.2f} {_UNITS[mem_unit]}\n"
+            report += f"  Objects: {obj}\n"
+            report += f"  File Descriptors: {fd}\n"
+            report += f"  Loaded jobs: {self._jobs_iteration[i]}\n"
+            report += f"  Loaded edges: {self._edges_iteration[i]}\n"
+
+        # Total Growth
+        report += "\n" + _generate_title("Total Growth") + "\n"
+
+        mem_total_grow = self._mem_total_grow
+        mem_unit = 0
+        while mem_total_grow >= 1024 and mem_unit <= len(_UNITS) - 1:
+            mem_unit += 1
+            mem_total_grow /= 1024
+
+        report += f"  Memory Total Growth: {mem_total_grow:.2f} {_UNITS[mem_unit]}\n"
+        report += f"  Object Total Growth: {self._obj_total_grow}\n"
+        report += f"  File Descriptor Total Growth: {self._fd_total_grow}\n"
+
+        return report
+
+    def _report(self) -> None:
+        """Print the final report to stdout, log, and filesystem.
+
+        :raises AutosubmitCritical: If the report directory is not writable.
+        """
         # Create the profiler path if it does not exist
         report_path = Path(BasicConfig.LOCAL_ROOT_DIR, self._expid, "tmp", "profile")
         report_path.mkdir(parents=True, exist_ok=True)
@@ -128,6 +226,8 @@ class Profiler:
             ""
         ]).replace('{', '{{').replace('}', '}}')  # escape {} so Log can call str.format
 
+        if self._mem_grow and self._obj_grow and self._fd_grow:
+            report += self._report_grow()
         Log.info(report)
 
         stats.dump_stats(Path(report_path, f"{self._expid}_profile_{date_time}.prof"))
@@ -139,10 +239,9 @@ class Profiler:
 
 
 def _generate_title(title="") -> str:
-    """
-    Generates a title banner with the specified text.
+    """Generate a title banner with the specified text.
 
-    :param title: The title that will be shown in the banner.
+    :param title: The title to display in the banner.
     :type title: str
     :return: The banner with the specified title.
     :rtype: str
@@ -154,10 +253,39 @@ def _generate_title(title="") -> str:
 
 
 def _get_current_memory() -> int:
-    """
-    Return the current memory consumption of the process in Bytes.
+    """Return the current memory consumption of the process in Bytes.
 
-    :return: The current memory used by the process (Bytes).
+    :return: The current memory used by the process in Bytes.
     :rtype: int
     """
     return Process(os.getpid()).memory_info().rss
+
+
+def _get_current_object_count() -> int:
+    """Return total number of tracked Python objects.
+
+    :return: The count of all tracked objects.
+    :rtype: int
+    """
+    return len(gc.get_objects())
+
+
+def _get_current_open_fds() -> int:
+    """Return count of open file descriptors.
+
+    Falls back to approximating using open files and connections
+    if direct FD/handle count is unavailable.
+
+    :return: The number of open file descriptors or handles.
+    :rtype: int
+    """
+    proc = Process(os.getpid())
+    if hasattr(proc, "num_fds"):
+        return proc.num_fds()
+    if hasattr(proc, "num_handles"):
+        return proc.num_handles()
+
+    # Fallback: approximate using open files + connections
+    open_files = len(proc.open_files())
+    connections = len(proc.net_connections(kind="all"))
+    return open_files + connections

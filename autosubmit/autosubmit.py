@@ -2201,7 +2201,7 @@ class Autosubmit:
 
     @staticmethod
     def run_experiment(expid: str, start_time: Optional[str] = None, start_after: Optional[str] = None,
-                       run_only_members: Optional[str] = None, profile=False) -> int:
+                       run_only_members: Optional[str] = None, profile: bool = False) -> int:
         """Runs and experiment (submitting all the jobs properly and repeating its execution in case of failure).
 
         :param expid: the experiment id
@@ -2217,6 +2217,8 @@ class Autosubmit:
             from .profiler.profiler import Profiler
             profiler = Profiler(expid)
             profiler.start()
+        else:
+            profiler = None
 
         # Initialize common folders'
         try:
@@ -2272,7 +2274,11 @@ class Autosubmit:
                 job_list.recover_logs(new_run=True)
                 # Save metadata.
                 as_conf.save()
+                if profile:
+                    profiler.iteration_checkpoint(len(job_list.get_job_list()), len(job_list.graph_dict))
                 while job_list.continue_run():
+                    if profile:
+                        profiler.iteration_checkpoint(len(job_list.get_job_list()), len(job_list.graph_dict))
                     try:
                         if Autosubmit.exit:
                             if len(job_list.get_failed_from_db()) > 0:
@@ -2437,6 +2443,8 @@ class Autosubmit:
                     Log.info("Some jobs have failed and reached maximum retrials")
                 else:
                     Log.result("Run successful")
+                    if profile:
+                        profiler.iteration_checkpoint(len(job_list.get_job_list()), len(job_list.graph_dict))
                     # Updating finish time for job data header
                     # Database is locked, may be related to my local db todo 4.1.1
                     try:
