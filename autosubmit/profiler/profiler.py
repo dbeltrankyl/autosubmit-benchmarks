@@ -20,6 +20,7 @@ import gc
 import io
 import os
 import pstats
+import sys
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -117,6 +118,8 @@ class Profiler:
         self._fd_iteration.append(_get_current_open_fds())
         self._jobs_iteration.append(loaded_jobs)
         self._edges_iteration.append(loaded_edges)
+
+        self._mem_iteration[-1] -= sys.getsizeof(self._mem_iteration) + sys.getsizeof(self._obj_iteration) + sys.getsizeof(self._fd_iteration)
 
     def stop(self) -> None:
         """Finish the profiling process and generate reports.
