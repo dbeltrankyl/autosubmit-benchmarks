@@ -165,6 +165,7 @@ class Profiler:
         :return: The updated report string with growth metrics.
         :rtype: str
         """
+        report = ""
         for i in range(len(self._mem_iteration[1:-1])):
             mem = self._mem_iteration[i]
             obj = self._obj_iteration[i]
@@ -212,7 +213,6 @@ class Profiler:
             ""
         ])
         # Generate memory profiling results
-        report = ""
         if self._mem_grow and self._obj_grow and self._fd_grow:
             report = "\n" + _generate_title("Memory, object and file descriptor by iteration") + "\n"
             report += self._report_grow()
