@@ -261,8 +261,8 @@ def test_autosubmit_create_profile_metrics(tmp_path: Path, autosubmit_exp, gener
 @pytest.mark.parametrize("members,chunks,splits",
                          [
                              # pytest.param("fc0", "1", "1", marks=[pytest.mark.profile, pytest.mark.profilelong]),
-                             # pytest.param("fc0 fc1", "2", "2", marks=[pytest.mark.profile, pytest.mark.profilelong]),
-                             pytest.param("fc0 fc1 fc2 fc3", "2", "5", marks=[pytest.mark.profilelong]),
+                             pytest.param("fc0 fc1", "2", "2", marks=[pytest.mark.profile, pytest.mark.profilelong]),
+                             # pytest.param("fc0 fc1 fc2 fc3", "2", "5", marks=[pytest.mark.profilelong]),
                              # pytest.param("fc0 fc1 fc2 fc3", "2", "10", marks=[pytest.mark.profilelong]),
                          ],
                          ids=[

@@ -691,7 +691,6 @@ def _save_experiment_sqlalchemy(name: str, description: str, version: str) -> bo
                     )
                 )
         except Exception as exc:
-            conn.rollback()
             raise AutosubmitCritical("Could not register experiment", 7005, str(exc))
     return True
 
