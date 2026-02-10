@@ -631,8 +631,7 @@ class SqlAlchemyExperimentHistoryDbManager:
         experiment_run_table = get_table_with_schema(self.schema, ExperimentRunTable)
         query = select(func.max(experiment_run_table.c.run_id))
         with self.engine.connect() as conn:
-            with conn.begin():
-                result = conn.execute(query).first()
+            result = conn.execute(query).first()
         return result[0] if result and result[0] is not None else 0
 
     def is_there_a_last_experiment_run(self):
@@ -644,15 +643,13 @@ class SqlAlchemyExperimentHistoryDbManager:
             order_by(desc(experiment_run_table.c.run_id))
         )
         with self.engine.connect() as conn:
-            with conn.begin():
-                result = conn.execute(query).first()
+            result = conn.execute(query).first()
         return result is not None
 
     def get_job_data_all(self):
         job_data_table = get_table_with_schema(self.schema, JobDataTable)
         with self.engine.connect() as conn:
-            with conn.begin():
-                job_data_rows = conn.execute(select(job_data_table)).all()
+            job_data_rows = conn.execute(select(job_data_table)).all()
         return [Models.JobDataRow(*row) for row in job_data_rows]
 
     def register_submitted_job_data_dc(self, job_data_dc):
@@ -704,8 +701,7 @@ class SqlAlchemyExperimentHistoryDbManager:
             order_by(desc(job_data_table.c.counter))
         )
         with self.engine.connect() as conn:
-            with conn.begin():
-                job_data_rows_last = conn.execute(query).all()
+            job_data_rows_last = conn.execute(query).all()
         # if previous job didn't finished but a new create has been made
         if not job_data_rows_last:
             new_query = (
@@ -716,8 +712,7 @@ class SqlAlchemyExperimentHistoryDbManager:
                 order_by(desc(job_data_table.c.counter))
             )
             with self.engine.connect() as conn:
-                with conn.begin():
-                    job_data_rows_last = conn.execute(new_query).all()
+                job_data_rows_last = conn.execute(new_query).all()
         return [Models.JobDataRow(*row) for row in job_data_rows_last]
 
     def get_job_data_dcs_last_by_wrapper_code(self, wrapper_code):
@@ -740,8 +735,7 @@ class SqlAlchemyExperimentHistoryDbManager:
             order_by(job_data_table.c.id)
         )
         with self.engine.connect() as conn:
-            with conn.begin():
-                job_data_rows = conn.execute(query).all()
+            job_data_rows = conn.execute(query).all()
         return [Models.JobDataRow(*row) for row in job_data_rows]
 
     def get_all_last_job_data_dcs(self):
@@ -757,8 +751,7 @@ class SqlAlchemyExperimentHistoryDbManager:
             where(job_data_table.c.last == 1)  # type: ignore
         )
         with self.engine.connect() as conn:
-            with conn.begin():
-                job_data_rows = conn.execute(query).all()
+            job_data_rows = conn.execute(query).all()
         return [Models.JobDataRow(*row) for row in job_data_rows]
 
     def _insert_job_data(self, job_data):
@@ -863,9 +856,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             .order_by(job_data_table.c.counter.desc())
         )
         with self.engine.connect() as conn:
-            with conn.begin():
-                result = conn.execute(query).first()
-            return JobData.from_model(result)
+            result = conn.execute(query).first()
+        return JobData.from_model(result)
 
     def get_job_data_max_counter(self, job_name: str = None):
         """ The max counter is the maximum count value for the count column in job_data. """
@@ -874,8 +866,7 @@ class SqlAlchemyExperimentHistoryDbManager:
         if job_name:
             query = query.where(job_data_table.c.job_name == job_name)  # type: ignore
         with self.engine.connect() as conn:
-            with conn.begin():
-                result = conn.execute(query).first()
+            result = conn.execute(query).first()
         max_counter = result.maxcounter
         return max_counter if max_counter else DEFAULT_MAX_COUNTER
 
@@ -902,8 +893,7 @@ class SqlAlchemyExperimentHistoryDbManager:
             )
         )
         with self.engine.connect() as conn:
-            with conn.begin():
-                rows = conn.execute(query).fetchall()
+            rows = conn.execute(query).fetchall()
         columns = table.c.keys()
         return [tuple(zip(columns, row)) for row in rows]
 
