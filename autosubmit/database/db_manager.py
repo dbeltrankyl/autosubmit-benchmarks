@@ -77,7 +77,7 @@ class DbManager:
         with self.engine.connect() as conn:
             with conn.begin():
                 result = conn.execute(insert(table), data)
-        return cast(int, result.rowcount)
+                return cast(int, result.rowcount)
 
     def select_first_where(self, table_name: str, where: Optional[dict[str, str]]) -> Optional[Any]:
         table = get_table_from_name(schema=self.schema, table_name=table_name)
@@ -87,15 +87,15 @@ class DbManager:
                 query = query.where(getattr(table.c, key) == value)
         with self.engine.connect() as conn:
             row = conn.execute(query).first()
-        return row.tuple() if row else None
+            return row.tuple() if row else None
 
     def select_all_with_columns(self, table_name: str) -> List[tuple[tuple[str, Any]]]:
         """Select rows from a table. Return a list of hasheable tuples."""
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
             rows = conn.execute(select(table)).fetchall()
-        columns = table.c.keys()
-        return [tuple(zip(columns, row)) for row in rows]
+            columns = table.c.keys()
+            return [tuple(zip(columns, row)) for row in rows]
 
     def select_where_with_columns(
             self,
@@ -136,14 +136,14 @@ class DbManager:
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
             row = conn.execute(select(func.count()).select_from(table))
-        return row.scalar()
+            return row.scalar()
 
     def delete_all(self, table_name: str) -> int:
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
             with conn.begin():
                 result = conn.execute(delete(table))
-        return result.rowcount
+                return result.rowcount
 
     def delete_where(self, table_name: str, where: Optional[Union[dict[str, Any], ClauseElement]]) -> int:
         """Delete rows from a table where the specified conditions are met.
