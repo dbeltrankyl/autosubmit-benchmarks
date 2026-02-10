@@ -27,7 +27,7 @@ from sqlalchemy.schema import CreateTable, CreateSchema, DropTable
 
 from autosubmit.config.basicconfig import BasicConfig
 from autosubmit.database import session
-from autosubmit.database.tables import get_table_from_name
+from autosubmit.database.tables import get_table_from_name, TABLES, get_table_with_schema
 
 if TYPE_CHECKING:
     from autosubmit.database.tables import Table
@@ -47,9 +47,17 @@ class DbManager:
         self.engine: Engine = session.create_engine(connection_url)
         self.schema = schema if self.engine.name != "sqlite" else None
         self.restore_path = Path(BasicConfig.DB_PATH) / "autosubmit_db.sql"
+        self._init_cache_tables()
+
+    def _init_cache_tables(self) -> None:
+        """Cache all tables in the database to avoid mem leak. We're using only one schema, so we can cache all tables at once."""
+        self.tables: Dict[str, Table] = {}
+        for table in TABLES:
+            # This generates new objects that are never clean. Previosly, this was called every time we needed a table, which generated a lot of objects that were never cleaned, causing a memory leak. Now we cache the tables at initialization and reuse them.
+            self.tables[table.name] = get_table_from_name(schema=self.schema, table_name=table.name)
 
     def create_table(self, table_name: str) -> None:
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         with self.engine.connect() as conn:
             with conn.begin():
                 if self.schema:
@@ -57,7 +65,7 @@ class DbManager:
                 conn.execute(CreateTable(table, if_not_exists=True))
 
     def drop_table(self, table_name: str) -> None:
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         with self.engine.connect() as conn:
             with conn.begin():
                 conn.execute(DropTable(table, if_exists=True))
@@ -65,7 +73,7 @@ class DbManager:
     def insert(self, table_name: str, data: dict[str, Any]) -> None:
         if not data:
             return
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         with self.engine.connect() as conn:
             with conn.begin():
                 conn.execute(insert(table), data)
@@ -73,14 +81,14 @@ class DbManager:
     def insert_many(self, table_name: str, data: list[dict[str, Any]]) -> int:
         if not data:
             return 0
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         with self.engine.connect() as conn:
             with conn.begin():
                 result = conn.execute(insert(table), data)
                 return cast(int, result.rowcount)
 
     def select_first_where(self, table_name: str, where: Optional[dict[str, str]]) -> Optional[Any]:
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         query = select(table)
         if where:
             for key, value in where.items():
@@ -91,7 +99,7 @@ class DbManager:
 
     def select_all_with_columns(self, table_name: str) -> List[tuple[tuple[str, Any]]]:
         """Select rows from a table. Return a list of hasheable tuples."""
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         with self.engine.connect() as conn:
             rows = conn.execute(select(table)).fetchall()
             columns = table.c.keys()
@@ -133,13 +141,13 @@ class DbManager:
         return [tuple(zip(columns, row)) for row in rows]
 
     def count(self, table_name: str) -> int:
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         with self.engine.connect() as conn:
             row = conn.execute(select(func.count()).select_from(table))
             return row.scalar()
 
     def delete_all(self, table_name: str) -> int:
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         with self.engine.connect() as conn:
             with conn.begin():
                 result = conn.execute(delete(table))
@@ -157,7 +165,7 @@ class DbManager:
         :rtype: int
         :raises ValueError: If 'where' is empty.
         """
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         query = delete(table)
 
         if where:
@@ -190,7 +198,7 @@ class DbManager:
         if not data:
             return 0
 
-        table: Table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table: Table = self.tables[table_name]
         update_cols = [col for col in data[0].keys() if col not in conflict_cols]
 
         # NOTE general insert doesn't have on_conflict
@@ -219,7 +227,7 @@ class DbManager:
 
     def count_where(self, table_name: str, where: dict[str, Any]) -> int:
         """Count the number of rows in a table that match a given condition."""
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         query = select(func.count()).select_from(table)
         for key, value in where.items():
             query = query.where(getattr(table.c, key) == value)
@@ -308,7 +316,7 @@ class DbManager:
         :return: Number of rows updated.
         :raises ValueError: If 'where' is empty.
         """
-        table = get_table_from_name(schema=self.schema, table_name=table_name)
+        table = self.tables[table_name]
         query = table.update().values(**values)
 
         for key, value in where.items():

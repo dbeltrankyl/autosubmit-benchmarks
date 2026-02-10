@@ -550,7 +550,7 @@ class SqlAlchemyExperimentHistoryDbManager:
             with conn.begin():
                 if BasicConfig.DATABASE_BACKEND != "sqlite":
                     conn.execute(CreateSchema(self.schema, if_not_exists=True))
-                conn.execute(CreateTable(get_table_with_schema(self.schema, ExperimentRunTable), if_not_exists=True))
+                conn.execute(CreateTable(get_table_with_schema(self.schema, ExperimentRunTable.name), if_not_exists=True))
                 conn.execute(CreateTable(get_table_with_schema(self.schema, JobDataTable), if_not_exists=True))
             # TODO: implement db migrations?
             # self._set_historical_pragma_version(CURRENT_DB_VERSION)
