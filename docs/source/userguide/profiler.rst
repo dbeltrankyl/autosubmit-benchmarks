@@ -29,7 +29,7 @@ please, do not use it on concurrent code. For memory profiling, it uses ``psutil
 .. caution::
       This profiler was originally designed to be used in the ``autosubmit run`` command, so using 
       it in other functions may produce unexpected results or errors. Now, its usage have been 
-      extended to ``autosubmit create`` and ``monitor``.
+      extended to ``autosubmit create``, ``monitor``, ``setstatus`` and ``recovery``.
       
       The profiler instantiation requires an ``<EXPID>``, and not all the functions in Autosubmit use it.
       This can be bypassed using another string, but keep in mind that there is no error handling in
@@ -39,7 +39,7 @@ How to profile a function or a specific code fragment?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Depending on the Autosubmit function you want to profile, you must add a ``--profile`` argument to the
-parser. The ``autosubmit run``, ``create`` and ``monitor`` subcommands already support it. It is
+parser. The ``autosubmit run``, ``create``, ``monitor``, ``recovery`` and ``setstatus`` subcommands already support it. It is
 recommended that the default value of this flag always be ``False``, to ensure that the profiler does
 not interfere with the normal execution in an unwanted way. You will need to add something like this to
 your parser:
@@ -48,16 +48,21 @@ your parser:
 
       subparser.add_argument('-p', '--profile', action='store_true', default=False, required=False,
       help='Prints performance parameters of the execution of this experiment.')
+      subparser.add_argument('-t', '--trace', action='store_true', default=False, required=False,
+                                   help='Enables trace output for profiling (requires --profile).')
+
 
 The function must receive the flag as argument to control the execution of the profiler. If the flag
 has value ``True``, you should proceed as follows:
 
-1. Instantiate a **Profiler(EXPID)** object. Specifying the ``<EXPID>`` is mandatory.
+1. Instantiate a **Profiler(EXPID, enable_trace)** object. Specifying the ``<EXPID>`` is mandatory but trace is optional. If you want to enable it, set the ``enable_trace`` argument to ``True``.
 
 2. Run the profiler by calling the **start()** function of the instantiated object, at the beginning
    of the function or code fragment you want to evaluate. The measurement will start instantly.
 
-3. Execute the **stop()** function of the profiler at the end of the function or code fragment to be
+3. Execute the **iteration_checkpoint(jobs_size, edges_size)** to take intermediate measurements at any point of the function or code fragment. This is optional, but it can be useful to get more detailed information about the performance of specific parts of the code.
+
+4. Execute the **stop()** function of the profiler at the end of the function or code fragment to be
    evaluated. The process of taking measurements will stop instantly. The report will be generated
    automatically and the files will be stored in the ``<EXPID>/tmp/profile`` directory.
 

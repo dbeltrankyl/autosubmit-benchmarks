@@ -21,6 +21,7 @@ import io
 import os
 import pstats
 import sys
+import tracemalloc
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -50,7 +51,7 @@ class Profiler:
     experiment execution and generates comprehensive profiling reports.
     """
 
-    def __init__(self, expid: str):
+    def __init__(self, expid: str, trace_enabled: bool = False):
         """Initialize the profiler with an experiment ID.
 
         :param expid: The experiment identifier.
@@ -82,6 +83,11 @@ class Profiler:
         self._jobs_iteration: list = []
         self._edges_iteration: list = []
 
+        # Allocation tracing
+        self._trace_enabled = trace_enabled
+        self._trace_snapshots: list = []
+        self._trace_stats_by_iter: list = []
+
     @property
     def started(self) -> bool:
         """Check if the profiler is in the started state.
@@ -112,12 +118,23 @@ class Profiler:
         gc.collect()
         self._mem_init = _get_current_memory()
 
+        if self._trace_enabled and not tracemalloc.is_tracing():
+            tracemalloc.start()
+
     def iteration_checkpoint(self, loaded_jobs: int, loaded_edges: int):
         """Record metrics at the checkpoint of an iteration."""
         gc.collect()
+
         self._mem_iteration.append(_get_current_memory())
         self._obj_iteration.append(_get_current_object_count())
         self._fd_iteration.append(_get_current_open_fds())
+        if self._trace_enabled and tracemalloc.is_tracing():
+            snapshot = tracemalloc.take_snapshot()
+            self._trace_stats_by_iter.append(
+                self._capture_allocation_delta(snapshot)
+            )
+            self._trace_snapshots.append(snapshot)
+
         self._jobs_iteration.append(loaded_jobs)
         self._edges_iteration.append(loaded_edges)
 
@@ -142,6 +159,9 @@ class Profiler:
 
         self._report()
         self._state = ProfilerState.STOPPED
+
+        if self._trace_enabled and tracemalloc.is_tracing():
+            tracemalloc.stop()
 
     def _calculate_grow(self) -> None:
         """Calculate total growth metrics for objects and file descriptors."""
@@ -182,7 +202,42 @@ class Profiler:
             report += f"  File Descriptors: {fd}\n"
             report += f"  Loaded jobs: {self._jobs_iteration[i]}\n"
             report += f"  Loaded edges: {self._edges_iteration[i]}\n"
+
+            if i < len(self._trace_stats_by_iter):
+                report += self._format_top_allocations(self._trace_stats_by_iter[i])
         return report
+
+    def _capture_allocation_delta(self, snapshot: tracemalloc.Snapshot) -> list:
+        """Return top allocation deltas since the previous snapshot.
+
+        :param snapshot: The current tracemalloc snapshot.
+        :return: A list of tracemalloc StatisticDiff entries.
+        :rtype: list
+        """
+        if not self._trace_snapshots:
+            return []
+        previous = self._trace_snapshots[-1]
+        stats = snapshot.compare_to(previous, "lineno")
+        return [stat for stat in stats if stat.size_diff > 0][:5]
+
+    def _format_top_allocations(self, stats: list) -> str:
+        """Format tracemalloc allocation deltas for the report.
+
+        :param stats: Allocation delta statistics.
+        :return: A formatted string for the report.
+        :rtype: str
+        """
+        if not stats:
+            return ""
+        lines = ["  Top allocation deltas:\n"]
+        for stat in stats:
+            frame = stat.traceback[0]
+            lines.append(
+                f"    {frame.filename}:{frame.lineno} "
+                f"+{stat.size_diff / 1024:.1f} KiB "
+                f"({stat.count_diff:+d} blocks)\n"
+            )
+        return "".join(lines)
 
     def _report(self) -> None:
         """Print the final report to stdout, log, and filesystem.
