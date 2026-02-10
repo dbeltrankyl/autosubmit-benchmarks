@@ -166,8 +166,7 @@ class SqlAlchemyExperimentStatusDbManager:
             where(ExperimentTable.c.name == expid)  # type: ignore
         )
         with self.engine.connect() as conn:
-            with conn.begin():
-                row = conn.execute(query).first()
+            row = conn.execute(query).first()
             if not row:
                 raise ValueError("Experiment {0} not found in Postgres {1}".format(expid, expid))
         return Models.ExperimentRow(*row)
@@ -178,8 +177,7 @@ class SqlAlchemyExperimentStatusDbManager:
             where(ExperimentStatusTable.c.exp_id == exp_id)  # type: ignore
         )
         with self.engine.connect() as conn:
-            with conn.begin():
-                row = conn.execute(query).first()
+            row = conn.execute(query).first()
             if not row:
                 return None
         return Models.ExperimentStatusRow(*row)

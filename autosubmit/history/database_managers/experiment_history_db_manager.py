@@ -620,8 +620,7 @@ class SqlAlchemyExperimentHistoryDbManager:
             order_by(desc(experiment_run_table.c.run_id))
         )
         with self.engine.connect() as conn:
-            with conn.begin():
-                row = conn.execute(query).first()
+            row = conn.execute(query).first()
             if not row:
                 raise Exception("No Experiment Runs registered.")
         return Models.ExperimentRunRow(*row)
