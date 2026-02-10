@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy.schema import CreateTable, CreateSchema
+from sqlalchemy import insert, select, delete
 
 from autosubmit.config.basicconfig import BasicConfig
 from autosubmit.config.configcommon import AutosubmitConfig
@@ -151,7 +152,7 @@ class UserMetricRepository:
             with conn.begin():
                 # Delete the existing metric
                 conn.execute(
-                    self.table.delete().where(
+                    delete(self.table).where(
                         self.table.c.run_id == run_id,
                         self.table.c.job_name == job_name,
                         self.table.c.metric_name == metric_name,
@@ -160,7 +161,7 @@ class UserMetricRepository:
 
                 # Insert the new metric
                 conn.execute(
-                    self.table.insert().values(
+                    insert(self.table).values(
                         run_id=run_id,
                         job_name=job_name,
                         metric_name=metric_name,

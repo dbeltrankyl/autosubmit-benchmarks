@@ -24,7 +24,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, Union
 
-from sqlalchemy import Table
+from sqlalchemy import Table, select, insert, delete
 
 from autosubmit.config.basicconfig import BasicConfig
 from autosubmit.config.configcommon import AutosubmitConfig
@@ -180,9 +180,7 @@ class ExperimentDetailsSQLAlchemyRepository(ExperimentDetailsRepository):
     def get_details(self, exp_id: int):
         with self.engine.connect() as conn:
             with conn.begin():
-                result = conn.execute(
-                self.table.select().where(self.table.c.exp_id == exp_id)
-            ).one_or_none()
+                result = conn.execute(select(self.table).where(self.table.c.exp_id == exp_id)).one_or_none()
             if result:
                 return {
                     "exp_id": result.exp_id,
@@ -200,9 +198,9 @@ class ExperimentDetailsSQLAlchemyRepository(ExperimentDetailsRepository):
     ):
         with self.engine.connect() as conn:
             with conn.begin():
-                conn.execute(self.table.delete().where(self.table.c.exp_id == exp_id))
+                conn.execute(delete(self.table).where(self.table.c.exp_id == exp_id))
                 conn.execute(
-                    self.table.insert().values(
+                    insert(self.table).values(
                         exp_id=exp_id,
                         user=user,
                         created=created,
@@ -215,7 +213,7 @@ class ExperimentDetailsSQLAlchemyRepository(ExperimentDetailsRepository):
     def delete_details(self, exp_id: int):
         with self.engine.connect() as conn:
             with conn.begin():
-                conn.execute(self.table.delete().where(self.table.c.exp_id == exp_id))
+                conn.execute(delete(self.table).where(self.table.c.exp_id == exp_id))
 
 
 def create_experiment_details_repository(
