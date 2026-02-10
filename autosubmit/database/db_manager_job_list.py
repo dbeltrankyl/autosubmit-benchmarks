@@ -371,7 +371,8 @@ class JobsDbManager(DbManager):
         subquery = stmt.alias('subq')
         query = select(*(col for col in subquery.c if col.name != 'row_number')).where(subquery.c.row_number == 1)
         with self.engine.connect() as conn:
-            result = conn.execute(query)
+            with conn.begin():
+                result = conn.execute(query)
             return [dict(row) for row in result.mappings().all()]
 
     def load_wrappers(self, preview: bool = False, job_list: Any = None) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

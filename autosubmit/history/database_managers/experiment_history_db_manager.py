@@ -547,11 +547,11 @@ class SqlAlchemyExperimentHistoryDbManager:
 
     def create_historical_database(self):
         with self.engine.connect() as conn:
-            if BasicConfig.DATABASE_BACKEND != "sqlite":
-                conn.execute(CreateSchema(self.schema, if_not_exists=True))
-            conn.execute(CreateTable(get_table_with_schema(self.schema, ExperimentRunTable), if_not_exists=True))
-            conn.execute(CreateTable(get_table_with_schema(self.schema, JobDataTable), if_not_exists=True))
-            conn.commit()
+            with conn.begin():
+                if BasicConfig.DATABASE_BACKEND != "sqlite":
+                    conn.execute(CreateSchema(self.schema, if_not_exists=True))
+                conn.execute(CreateTable(get_table_with_schema(self.schema, ExperimentRunTable), if_not_exists=True))
+                conn.execute(CreateTable(get_table_with_schema(self.schema, JobDataTable), if_not_exists=True))
             # TODO: implement db migrations?
             # self._set_historical_pragma_version(CURRENT_DB_VERSION)
 
@@ -583,8 +583,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             )
         )
         with self.engine.connect() as conn:
-            conn.execute(query)
-            conn.commit()
+            with conn.begin():
+                conn.execute(query)
         return ExperimentRun.from_model(self._get_experiment_run_with_max_id())
 
     def update_experiment_run_dc_by_id(self, experiment_run_dc):
@@ -607,8 +607,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             )
         )
         with self.engine.connect() as conn:
-            conn.execute(query)
-            conn.commit()
+            with conn.begin():
+                conn.execute(query)
         return ExperimentRun.from_model(self._get_experiment_run_with_max_id())
 
     def _get_experiment_run_with_max_id(self):
@@ -620,7 +620,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             order_by(desc(experiment_run_table.c.run_id))
         )
         with self.engine.connect() as conn:
-            row = conn.execute(query).first()
+            with conn.begin():
+                row = conn.execute(query).first()
             if not row:
                 raise Exception("No Experiment Runs registered.")
         return Models.ExperimentRunRow(*row)
@@ -630,7 +631,8 @@ class SqlAlchemyExperimentHistoryDbManager:
         experiment_run_table = get_table_with_schema(self.schema, ExperimentRunTable)
         query = select(func.max(experiment_run_table.c.run_id))
         with self.engine.connect() as conn:
-            result = conn.execute(query).first()
+            with conn.begin():
+                result = conn.execute(query).first()
         return result[0] if result and result[0] is not None else 0
 
     def is_there_a_last_experiment_run(self):
@@ -642,13 +644,15 @@ class SqlAlchemyExperimentHistoryDbManager:
             order_by(desc(experiment_run_table.c.run_id))
         )
         with self.engine.connect() as conn:
-            result = conn.execute(query).first()
+            with conn.begin():
+                result = conn.execute(query).first()
         return result is not None
 
     def get_job_data_all(self):
         job_data_table = get_table_with_schema(self.schema, JobDataTable)
         with self.engine.connect() as conn:
-            job_data_rows = conn.execute(select(job_data_table)).all()
+            with conn.begin():
+                job_data_rows = conn.execute(select(job_data_table)).all()
         return [Models.JobDataRow(*row) for row in job_data_rows]
 
     def register_submitted_job_data_dc(self, job_data_dc):
@@ -700,7 +704,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             order_by(desc(job_data_table.c.counter))
         )
         with self.engine.connect() as conn:
-            job_data_rows_last = conn.execute(query).all()
+            with conn.begin():
+                job_data_rows_last = conn.execute(query).all()
         # if previous job didn't finished but a new create has been made
         if not job_data_rows_last:
             new_query = (
@@ -711,7 +716,8 @@ class SqlAlchemyExperimentHistoryDbManager:
                 order_by(desc(job_data_table.c.counter))
             )
             with self.engine.connect() as conn:
-                job_data_rows_last = conn.execute(new_query).all()
+                with conn.begin():
+                    job_data_rows_last = conn.execute(new_query).all()
         return [Models.JobDataRow(*row) for row in job_data_rows_last]
 
     def get_job_data_dcs_last_by_wrapper_code(self, wrapper_code):
@@ -734,7 +740,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             order_by(job_data_table.c.id)
         )
         with self.engine.connect() as conn:
-            job_data_rows = conn.execute(query).all()
+            with conn.begin():
+                job_data_rows = conn.execute(query).all()
         return [Models.JobDataRow(*row) for row in job_data_rows]
 
     def get_all_last_job_data_dcs(self):
@@ -750,7 +757,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             where(job_data_table.c.last == 1)  # type: ignore
         )
         with self.engine.connect() as conn:
-            job_data_rows = conn.execute(query).all()
+            with conn.begin():
+                job_data_rows = conn.execute(query).all()
         return [Models.JobDataRow(*row) for row in job_data_rows]
 
     def _insert_job_data(self, job_data):
@@ -791,8 +799,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             )
         )
         with self.engine.connect() as conn:
-            result = conn.execute(insert_query)
-            conn.commit()
+            with conn.begin():
+                result = conn.execute(insert_query)
         return result.lastrowid
 
     def update_many_job_data_change_status(self, changes):
@@ -803,18 +811,18 @@ class SqlAlchemyExperimentHistoryDbManager:
         """
         job_data_table = get_table_with_schema(self.schema, JobDataTable)
         with self.engine.connect() as conn:
-            for change in changes:
-                query = (
-                    update(job_data_table).
-                    where(job_data_table.c.id == change[3]).  # type: ignore
-                    values(
-                        modified=change[0],
-                        status=change[1],
-                        rowstatus=change[2]
+            with conn.begin():
+                for change in changes:
+                    query = (
+                        update(job_data_table).
+                        where(job_data_table.c.id == change[3]).  # type: ignore
+                        values(
+                            modified=change[0],
+                            status=change[1],
+                            rowstatus=change[2]
+                        )
                     )
-                )
-                conn.execute(query)
-            conn.commit()
+                    conn.execute(query)
 
     def _update_job_data_by_id(self, job_data_dc):
         job_data_table = get_table_with_schema(self.schema, JobDataTable)
@@ -842,8 +850,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             )
         )
         with self.engine.connect() as conn:
-            conn.execute(query)
-            conn.commit()
+            with conn.begin():
+                conn.execute(query)
 
     def get_job_data_by_job_id_name(self, job_id: int, job_name: str) -> JobData:
         """Get the job data by job ID and name."""
@@ -855,7 +863,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             .order_by(job_data_table.c.counter.desc())
         )
         with self.engine.connect() as conn:
-            result = conn.execute(query).first()
+            with conn.begin():
+                result = conn.execute(query).first()
             return JobData.from_model(result)
 
     def get_job_data_max_counter(self, job_name: str = None):
@@ -865,7 +874,8 @@ class SqlAlchemyExperimentHistoryDbManager:
         if job_name:
             query = query.where(job_data_table.c.job_name == job_name)  # type: ignore
         with self.engine.connect() as conn:
-            result = conn.execute(query).first()
+            with conn.begin():
+                result = conn.execute(query).first()
         max_counter = result.maxcounter
         return max_counter if max_counter else DEFAULT_MAX_COUNTER
 
@@ -892,7 +902,8 @@ class SqlAlchemyExperimentHistoryDbManager:
             )
         )
         with self.engine.connect() as conn:
-            rows = conn.execute(query).fetchall()
+            with conn.begin():
+                rows = conn.execute(query).fetchall()
         columns = table.c.keys()
         return [tuple(zip(columns, row)) for row in rows]
 

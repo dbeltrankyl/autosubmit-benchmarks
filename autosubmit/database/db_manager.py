@@ -51,32 +51,32 @@ class DbManager:
     def create_table(self, table_name: str) -> None:
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
-            if self.schema:
-                conn.execute(CreateSchema(self.schema, if_not_exists=True))
-            conn.execute(CreateTable(table, if_not_exists=True))
-            conn.commit()
+            with conn.begin():
+                if self.schema:
+                    conn.execute(CreateSchema(self.schema, if_not_exists=True))
+                conn.execute(CreateTable(table, if_not_exists=True))
 
     def drop_table(self, table_name: str) -> None:
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
-            conn.execute(DropTable(table, if_exists=True))
-            conn.commit()
+            with conn.begin():
+                conn.execute(DropTable(table, if_exists=True))
 
     def insert(self, table_name: str, data: dict[str, Any]) -> None:
         if not data:
             return
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
-            conn.execute(insert(table), data)
-            conn.commit()
+            with conn.begin():
+                conn.execute(insert(table), data)
 
     def insert_many(self, table_name: str, data: list[dict[str, Any]]) -> int:
         if not data:
             return 0
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
-            result = conn.execute(insert(table), data)
-            conn.commit()
+            with conn.begin():
+                result = conn.execute(insert(table), data)
         return cast(int, result.rowcount)
 
     def select_first_where(self, table_name: str, where: Optional[dict[str, str]]) -> Optional[Any]:
@@ -86,14 +86,16 @@ class DbManager:
             for key, value in where.items():
                 query = query.where(getattr(table.c, key) == value)
         with self.engine.connect() as conn:
-            row = conn.execute(query).first()
+            with conn.begin():
+                row = conn.execute(query).first()
         return row.tuple() if row else None
 
     def select_all_with_columns(self, table_name: str) -> List[tuple[tuple[str, Any]]]:
         """Select rows from a table. Return a list of hasheable tuples."""
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
-            rows = conn.execute(select(table)).fetchall()
+            with conn.begin():
+                rows = conn.execute(select(table)).fetchall()
         columns = table.c.keys()
         return [tuple(zip(columns, row)) for row in rows]
 
@@ -128,21 +130,23 @@ class DbManager:
             query = query.where(where)
 
         with self.engine.connect() as conn:
-            rows = conn.execute(query).fetchall()
+            with conn.begin():
+                rows = conn.execute(query).fetchall()
 
         return [tuple(zip(columns, row)) for row in rows]
 
     def count(self, table_name: str) -> int:
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
-            row = conn.execute(select(func.count()).select_from(table))
+            with conn.begin():
+                row = conn.execute(select(func.count()).select_from(table))
             return row.scalar()
 
     def delete_all(self, table_name: str) -> int:
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
-            result = conn.execute(delete(table))
-            conn.commit()
+            with conn.begin():
+                result = conn.execute(delete(table))
         return result.rowcount
 
     def delete_where(self, table_name: str, where: Optional[Union[dict[str, Any], ClauseElement]]) -> int:
@@ -172,8 +176,8 @@ class DbManager:
                 "The 'where' parameter must be a non-empty dictionary. Multiple-table criteria within Delete are not supported.")
 
         with self.engine.connect() as conn:
-            result = conn.execute(query)
-            conn.commit()
+            with conn.begin():
+                result = conn.execute(query)
         return result.rowcount
 
     def upsert_many(self, table_name: str, data: List[Dict[str, Any]], conflict_cols: List[str], batch_size: int = 1000) -> int:
@@ -209,11 +213,11 @@ class DbManager:
 
         total_rows = 0
         with self.engine.connect() as conn:
-            for i in range(0, len(data), batch_size):
-                batch = data[i:i + batch_size]
-                result = conn.execute(update_stmt, batch)
-                total_rows += result.rowcount
-            conn.commit()
+            with conn.begin():
+                for i in range(0, len(data), batch_size):
+                    batch = data[i:i + batch_size]
+                    result = conn.execute(update_stmt, batch)
+                    total_rows += result.rowcount
 
         return total_rows
 
@@ -224,7 +228,8 @@ class DbManager:
         for key, value in where.items():
             query = query.where(getattr(table.c, key) == value)
         with self.engine.connect() as conn:
-            row = conn.execute(query).scalar()
+            with conn.begin():
+                row = conn.execute(query).scalar()
         return cast(int, row) if row is not None else 0
 
     # TODO: Don't mind this function, is half-cook will be done in another PR or maybe not needed at all
@@ -319,7 +324,7 @@ class DbManager:
                 query = query.where(column == value)
 
         with self.engine.connect() as conn:
-            result = conn.execute(query)
-            conn.commit()
-            
+            with conn.begin():
+                result = conn.execute(query)
+
         return result.rowcount

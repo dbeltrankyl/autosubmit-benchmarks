@@ -147,8 +147,8 @@ class SqlAlchemyExperimentStatusDbManager:
         connection_url = get_connection_url(Path(BasicConfig.DATABASE_CONN_URL))
         self.engine = session.create_engine(connection_url=connection_url)
         with self.engine.connect() as conn:
-            conn.execute(CreateTable(ExperimentStatusTable, if_not_exists=True))
-            conn.commit()
+            with conn.begin():
+                conn.execute(CreateTable(ExperimentStatusTable, if_not_exists=True))
 
     def set_existing_experiment_status_as_running(self, expid):
         self.update_exp_status(expid, Models.RunningStatus.RUNNING)
@@ -166,7 +166,8 @@ class SqlAlchemyExperimentStatusDbManager:
             where(ExperimentTable.c.name == expid)  # type: ignore
         )
         with self.engine.connect() as conn:
-            row = conn.execute(query).first()
+            with conn.begin():
+                row = conn.execute(query).first()
             if not row:
                 raise ValueError("Experiment {0} not found in Postgres {1}".format(expid, expid))
         return Models.ExperimentRow(*row)
@@ -177,7 +178,8 @@ class SqlAlchemyExperimentStatusDbManager:
             where(ExperimentStatusTable.c.exp_id == exp_id)  # type: ignore
         )
         with self.engine.connect() as conn:
-            row = conn.execute(query).first()
+            with conn.begin():
+                row = conn.execute(query).first()
             if not row:
                 return None
         return Models.ExperimentStatusRow(*row)
@@ -194,10 +196,10 @@ class SqlAlchemyExperimentStatusDbManager:
             )
         )
         with self.engine.connect() as conn:
-            result = conn.execute(query)
-            # NOTE: SQLite == rowcount(), PG == rowcount. Intriguing.
-            row_count = result.rowcount() if callable(result.rowcount) else result.rowcount
-            conn.commit()
+            with conn.begin():
+                result = conn.execute(query)
+                # NOTE: SQLite == rowcount(), PG == rowcount. Intriguing.
+                row_count = result.rowcount() if callable(result.rowcount) else result.rowcount
         return row_count
 
     def update_exp_status(self, expid: str, status="RUNNING") -> None:
@@ -211,8 +213,8 @@ class SqlAlchemyExperimentStatusDbManager:
             )
         )
         with self.engine.connect() as conn:
-            conn.execute(query)
-            conn.commit()
+            with conn.begin():
+                conn.execute(query)
 
 
 def create_experiment_status_db_manager(db_engine: str, **options) -> ExperimentStatusDatabaseManager:

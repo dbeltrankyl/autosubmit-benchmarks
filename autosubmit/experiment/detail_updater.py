@@ -179,7 +179,8 @@ class ExperimentDetailsSQLAlchemyRepository(ExperimentDetailsRepository):
 
     def get_details(self, exp_id: int):
         with self.engine.connect() as conn:
-            result = conn.execute(
+            with conn.begin():
+                result = conn.execute(
                 self.table.select().where(self.table.c.exp_id == exp_id)
             ).one_or_none()
             if result:
@@ -198,23 +199,23 @@ class ExperimentDetailsSQLAlchemyRepository(ExperimentDetailsRepository):
         self, exp_id: int, user: str, created: str, model: str, branch: str, hpc: str
     ):
         with self.engine.connect() as conn:
-            conn.execute(self.table.delete().where(self.table.c.exp_id == exp_id))
-            conn.execute(
-                self.table.insert().values(
-                    exp_id=exp_id,
-                    user=user,
-                    created=created,
-                    model=model,
-                    branch=branch,
-                    hpc=hpc,
+            with conn.begin():
+                conn.execute(self.table.delete().where(self.table.c.exp_id == exp_id))
+                conn.execute(
+                    self.table.insert().values(
+                        exp_id=exp_id,
+                        user=user,
+                        created=created,
+                        model=model,
+                        branch=branch,
+                        hpc=hpc,
+                    )
                 )
-            )
-            conn.commit()
 
     def delete_details(self, exp_id: int):
         with self.engine.connect() as conn:
-            conn.execute(self.table.delete().where(self.table.c.exp_id == exp_id))
-            conn.commit()
+            with conn.begin():
+                conn.execute(self.table.delete().where(self.table.c.exp_id == exp_id))
 
 
 def create_experiment_details_repository(

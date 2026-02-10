@@ -88,6 +88,11 @@ class Profiler:
         self._trace_snapshots: list = []
         self._trace_stats_by_iter: list = []
 
+        self._mem_grow: list = []
+        self._mem_total_grow: float = 0.0
+        self._obj_total_grow: int = 0
+        self._fd_total_grow: int = 0
+
     @property
     def started(self) -> bool:
         """Check if the profiler is in the started state.
