@@ -179,19 +179,18 @@ class ExperimentDetailsSQLAlchemyRepository(ExperimentDetailsRepository):
 
     def get_details(self, exp_id: int):
         with self.engine.connect() as conn:
-            with conn.begin():
-                result = conn.execute(select(self.table).where(self.table.c.exp_id == exp_id)).one_or_none()
-            if result:
-                return {
-                    "exp_id": result.exp_id,
-                    "user": result.user,
-                    "created": result.created,
-                    "model": result.model,
-                    "branch": result.branch,
-                    "hpc": result.hpc,
-                }
-            else:
-                return None
+            result = conn.execute(select(self.table).where(self.table.c.exp_id == exp_id)).one_or_none()
+        if result:
+            return {
+                "exp_id": result.exp_id,
+                "user": result.user,
+                "created": result.created,
+                "model": result.model,
+                "branch": result.branch,
+                "hpc": result.hpc,
+            }
+        else:
+            return None
 
     def upsert_details(
         self, exp_id: int, user: str, created: str, model: str, branch: str, hpc: str

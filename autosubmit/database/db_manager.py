@@ -86,16 +86,14 @@ class DbManager:
             for key, value in where.items():
                 query = query.where(getattr(table.c, key) == value)
         with self.engine.connect() as conn:
-            with conn.begin():
-                row = conn.execute(query).first()
+            row = conn.execute(query).first()
         return row.tuple() if row else None
 
     def select_all_with_columns(self, table_name: str) -> List[tuple[tuple[str, Any]]]:
         """Select rows from a table. Return a list of hasheable tuples."""
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
-            with conn.begin():
-                rows = conn.execute(select(table)).fetchall()
+            rows = conn.execute(select(table)).fetchall()
         columns = table.c.keys()
         return [tuple(zip(columns, row)) for row in rows]
 
@@ -130,17 +128,15 @@ class DbManager:
             query = query.where(where)
 
         with self.engine.connect() as conn:
-            with conn.begin():
-                rows = conn.execute(query).fetchall()
+            rows = conn.execute(query).fetchall()
 
         return [tuple(zip(columns, row)) for row in rows]
 
     def count(self, table_name: str) -> int:
         table = get_table_from_name(schema=self.schema, table_name=table_name)
         with self.engine.connect() as conn:
-            with conn.begin():
-                row = conn.execute(select(func.count()).select_from(table))
-            return row.scalar()
+            row = conn.execute(select(func.count()).select_from(table))
+        return row.scalar()
 
     def delete_all(self, table_name: str) -> int:
         table = get_table_from_name(schema=self.schema, table_name=table_name)
@@ -228,8 +224,7 @@ class DbManager:
         for key, value in where.items():
             query = query.where(getattr(table.c, key) == value)
         with self.engine.connect() as conn:
-            with conn.begin():
-                row = conn.execute(query).scalar()
+            row = conn.execute(query).scalar()
         return cast(int, row) if row is not None else 0
 
     # TODO: Don't mind this function, is half-cook will be done in another PR or maybe not needed at all
