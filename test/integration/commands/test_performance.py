@@ -280,7 +280,7 @@ def test_autosubmit_run_profile_metrics(tmp_path: Path, autosubmit_exp, general_
     yaml_data = prepare_yml(members=members, chunks=chunks, splits=splits)
     as_exp = autosubmit_exp(experiment_data=yaml_data, include_jobs=False, create=True)
     as_exp.as_conf.set_last_as_command('run')
-    as_exp.autosubmit.run_experiment(as_exp.expid, profile=True, trace=False)
+    as_exp.autosubmit.run_experiment(as_exp.expid, profile=True, trace=True)
     parse_metrics(as_exp, run_id=current_id, tmp_path=tmp_path)
 
 
