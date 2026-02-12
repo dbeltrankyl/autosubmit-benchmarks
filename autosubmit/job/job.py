@@ -2922,7 +2922,7 @@ class WrapperJob(Job):
         """
         save = False
         if scheduler_fetched_status not in [Status.COMPLETED, Status.FAILED]:
-            for job in [job for job in self.job_list]:
+            for job in self.job_list:
                 # Has the wrapped parent finished?
                 if all(parent.status == Status.COMPLETED for parent in job.parents):
                     job.new_status = scheduler_fetched_status

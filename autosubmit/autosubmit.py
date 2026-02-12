@@ -2283,7 +2283,7 @@ class Autosubmit:
                 as_conf.save()
                 while job_list.continue_run():
                     if profile:
-                        profiler.iteration_checkpoint(len(job_list.get_job_list()), len(job_list.graph_dict))
+                        profiler.iteration_checkpoint(len(job_list.graph.nodes()), len(job_list.graph_dict))
                     try:
                         if Autosubmit.exit:
                             if len(job_list.get_failed_from_db()) > 0:
@@ -2449,7 +2449,7 @@ class Autosubmit:
                 else:
                     Log.result("Run successful")
                     if profile:
-                        profiler.iteration_checkpoint(len(job_list.get_job_list()), len(job_list.graph_dict))
+                        profiler.iteration_checkpoint(len(job_list.graph.nodes()), len(job_list.graph_dict))
                     # Updating finish time for job data header
                     # Database is locked, may be related to my local db todo 4.1.1
                     try:

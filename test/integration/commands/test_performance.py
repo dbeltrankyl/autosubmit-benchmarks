@@ -164,7 +164,7 @@ def parse_metrics(as_exp: BasicConfig, run_id: str, tmp_path: Path):
     job_list = as_exp.autosubmit.load_job_list(as_exp.expid, as_exp.as_conf, new=False, full_load=True)
 
     total_dependencies = len(job_list.graph.edges)
-    total_jobs = len(job_list.get_job_list())
+    total_jobs = len(job_list.graph.nodes)
     metric_files = list(profile_path.glob("*.txt"))
     if not metric_files:
         pytest.fail("No profile files found")
@@ -280,7 +280,7 @@ def test_autosubmit_run_profile_metrics(tmp_path: Path, autosubmit_exp, general_
     yaml_data = prepare_yml(members=members, chunks=chunks, splits=splits)
     as_exp = autosubmit_exp(experiment_data=yaml_data, include_jobs=False, create=True)
     as_exp.as_conf.set_last_as_command('run')
-    as_exp.autosubmit.run_experiment(as_exp.expid, profile=True, trace=True)
+    as_exp.autosubmit.run_experiment(as_exp.expid, profile=True, trace=False)
     parse_metrics(as_exp, run_id=current_id, tmp_path=tmp_path)
 
 
