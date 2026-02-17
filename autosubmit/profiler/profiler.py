@@ -36,20 +36,13 @@ _UNITS = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
 
 
 class ProfilerState(Enum):
-    """Enumeration of profiler states.
-
-    Defines the possible states of the profiler lifecycle.
-    """
+    """Enumeration of profiler states"""
     STOPPED = "stopped"
     STARTED = "started"
 
 
 class Profiler:
-    """Profile the execution of experiments.
-
-    Tracks time, memory, objects, and file descriptor usage during
-    experiment execution and generates comprehensive profiling reports.
-    """
+    """Class to profile the execution of experiments."""
 
     def __init__(self, expid: str, trace_enabled: bool = False):
         """Initialize the profiler with an experiment ID.
@@ -274,7 +267,7 @@ class Profiler:
         ])
         # Generate memory profiling results
         if self._mem_grow and self._obj_grow and self._fd_grow:
-            report = "\n" + _generate_title("Memory, object and file descriptor by iteration") + "\n"
+            report += "\n" + _generate_title("Memory, object and file descriptor by iteration") + "\n"
             report += self._report_grow()
         report += "\n" + _generate_title("Overall Memory, Object and File Descriptor Growth") + "\n"
 

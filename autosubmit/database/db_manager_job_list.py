@@ -91,7 +91,6 @@ class JobsDbManager(DbManager):
             self,
             full_load: bool = False,
             load_failed_jobs: bool = False,
-            only_finished: bool = False,
             members: Optional[List[Any]] = None
     ) -> List[Dict[str, Any]]:
         """Return a  list of jobs loaded from the database.
@@ -100,30 +99,19 @@ class JobsDbManager(DbManager):
 
         :param full_load: If True, load all jobs.
         :param load_failed_jobs: If True, include failed jobs when loading active jobs.
-        :param only_finished: If True, load only finished jobs.
+        :param only_with_logs: If True, load only finished jobs.
         :param members: Optional list of member identifiers to filter jobs.
         :return: A list of job dictionaries.
         """
         table: Table = self.tables[JobsTable.name]
         self.create_table(table.name)
-        if only_finished:
-            job_list = self.select_finished_jobs()
-        elif full_load:
+        if full_load:
             job_list = self.select_all_jobs()
         else:
             job_list = self.select_active_jobs(include_failed=load_failed_jobs, members=members)
             job_list.extend(self.select_children_jobs(job_list, members=members))
             job_list = set(job_list)  # remove duplicates
 
-        return [dict(job) for job in job_list]
-
-    def select_finished_jobs(self) -> List[Dict[str, Any]]:
-        """Return the jobs from the database that have finished.
-        """
-        table: Table = self.tables[JobsTable.name]
-
-        self.create_table(table.name)
-        job_list = self.select_where_with_columns(table, {'status': [Status.COMPLETED, Status.FAILED, Status.SKIPPED]})
         return [dict(job) for job in job_list]
 
     def load_job_by_name(self, job_name: str) -> dict[str, Any]:

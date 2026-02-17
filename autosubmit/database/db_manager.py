@@ -35,6 +35,15 @@ if TYPE_CHECKING:
 if TYPE_CHECKING:
     from autosubmit.database.tables import Table
 
+if TYPE_CHECKING:
+    from autosubmit.database.tables import Table
+
+if TYPE_CHECKING:
+    from autosubmit.database.tables import Table
+
+if TYPE_CHECKING:
+    from autosubmit.database.tables import Table
+
 
 class DbManager:
     """A database manager using SQLAlchemy.
