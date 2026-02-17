@@ -191,7 +191,7 @@ add the ``--profile`` (or ``-p``) flag to your ``autosubmit run`` command, as in
 
 .. code-block:: bash
 
-    autosubmit run --profile <EXPID>
+    autosubmit run --profile <EXPID> {--trace}
 
 .. include:: ../../_include/profiler_common.rst
 

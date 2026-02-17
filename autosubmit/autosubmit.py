@@ -74,6 +74,7 @@ from autosubmit.notifications.notifier import Notifier
 from autosubmit.platforms.paramiko_platform import ParamikoPlatform
 from autosubmit.platforms.paramiko_submitter import ParamikoSubmitter
 from autosubmit.platforms.platform import Platform
+from autosubmit.utils import as_conf_default_values
 
 if TYPE_CHECKING:
     from autosubmit.job.job import Job
@@ -203,6 +204,9 @@ class Autosubmit:
                                    help='Sets members allowed on this run.')
             subparser.add_argument('-p', '--profile', action='store_true', default=False, required=False,
                                    help='Prints performance parameters of the execution of this command.')
+            subparser.add_argument('-t', '--trace', action='store_true', default=False, required=False,
+                                   help='Enables trace output for profiling (requires --profile).')
+
 
             # Expid
             subparser = subparsers.add_parser(
@@ -737,8 +741,10 @@ class Autosubmit:
         if args.command != "configure" and args.command != "install":
             Autosubmit._init_logs(args, args.logconsole, args.logfile, expid)
         if args.command == 'run':
+            if args.trace and not args.profile:
+                raise AutosubmitCritical('Tracing is only available with profiling. Please add -p/--profile flag to run with tracing.', 7012)
             return Autosubmit.run_experiment(args.expid, args.start_time, args.start_after, args.run_only_members,
-                                             args.profile)
+                                             args.profile, args.trace)
         elif args.command == 'expid':
             return Autosubmit.expid(args.description, args.HPC, args.copy, args.dummy, args.minimal_configuration,
                                     args.git_repo, args.git_branch, args.git_as_conf, args.operational, args.testcase,
@@ -1308,12 +1314,11 @@ class Autosubmit:
 
     @staticmethod
     def copy_as_config(exp_id, copy_id):
-        for conf_file in os.listdir(os.path.join(BasicConfig.LOCAL_ROOT_DIR, copy_id, "conf")):
+        for conf_file in os.listdir(Path(BasicConfig.LOCAL_ROOT_DIR, copy_id, "conf")):
             # Copy only relevant files
             if conf_file.endswith((".conf", ".yml", ".yaml")):
-                shutil.copy(os.path.join(BasicConfig.LOCAL_ROOT_DIR, copy_id, "conf", conf_file),
-                            os.path.join(BasicConfig.LOCAL_ROOT_DIR, exp_id, "conf",
-                                         conf_file.replace(copy_id, exp_id)))
+                shutil.copy(Path(BasicConfig.LOCAL_ROOT_DIR, copy_id, "conf", conf_file),
+                            Path(BasicConfig.LOCAL_ROOT_DIR, exp_id, "conf", conf_file.replace(copy_id, exp_id)))
             # if ends with .conf convert it to AS4 yaml file
             if conf_file.endswith(".conf"):
                 try:
@@ -1326,10 +1331,10 @@ class Autosubmit:
     @staticmethod
     def generate_as_config(
             exp_id: str,
-            dummy: bool = False,
-            minimal_configuration: bool = False,
-            local: bool = False,
-            parameters: dict[str, Union[dict, list, str]] = None
+            dummy: bool=False,
+            minimal_configuration: bool=False,
+            local: bool=False,
+            parameters: Optional[dict[str, Union[dict, list, str]]] = None
     ) -> None:
         """Retrieve the configuration from autosubmit.config package.
 
@@ -1423,86 +1428,6 @@ class Autosubmit:
                     _add_comments_to_yaml(yaml_data, parameter_comments)
                     yaml.dump(yaml_data, output)
 
-    @staticmethod
-    def replace_parameter_inside_section(content, parameter, new_value, section):
-        # same but for any section any parameter, not only EXPID case insensitive
-        # Find the any section
-        if section:
-            section_match = re.search(rf'({section}:[\s\S]*?{parameter}:.*?)(?=\n|$)', content, re.IGNORECASE)
-            if section_match:
-                section = section_match.group(1)
-                # Replace parameter in the section
-                new_section = re.sub(rf'({parameter}:).*', rf'\1 "{new_value}"', section)
-                # Replace the old section
-                content = content.replace(section, new_section)
-        else:
-            # replace only the parameter
-            content = re.sub(rf'({parameter}:).*', rf'\1 "{new_value}"', content)
-        return content
-
-    @staticmethod
-    def as_conf_default_values(exp_id:str, hpc:str = "local", minimal_configuration:bool = False, git_repo:str = "",
-                               git_branch:str = "main", git_as_conf:str = "") -> None:
-        """Replace default values in as_conf files.
-
-        :param exp_id: experiment id
-        :param hpc: platform
-        :param minimal_configuration: minimal configuration
-        :param git_repo: path to project git repository
-        :param git_branch: main branch
-        :param git_as_conf: path to as_conf file in git repository
-        :return: None
-        """
-        # the var hpc was hardcoded in the header of the function
-
-        # open and replace values
-        for as_conf_file in Path(BasicConfig.LOCAL_ROOT_DIR, f"{exp_id}/conf").iterdir():
-            if as_conf_file.name.endswith(".yml") or as_conf_file.name.endswith(".yaml"):
-                with open(as_conf_file, 'r+') as f:
-                    # Copied files could not have default names.
-                    content = f.read()
-                    search = re.search('AUTOSUBMIT_VERSION: .*', content, re.MULTILINE)
-                    if search is not None:
-                        content = content.replace(search.group(0), f"AUTOSUBMIT_VERSION: \""
-                                                                   f"{Autosubmit.autosubmit_version}\"")
-                    search = re.search('NOTIFICATIONS: .*', content, re.MULTILINE)
-                    if search is not None:
-                        content = content.replace(search.group(0), "NOTIFICATIONS: False")
-                    search = re.search('TO: .*', content, re.MULTILINE)
-                    if search is not None:
-                        content = content.replace(search.group(0), "TO: \"\"")
-                    content = Autosubmit.replace_parameter_inside_section(content, "EXPID", exp_id, "DEFAULT")
-                    search = re.search('HPCARCH: .*', content, re.MULTILINE)
-                    if search is not None:
-                        x = search.group(0).split(":")
-                        # clean blank space, quotes and double quote
-                        aux = x[1].strip(' "\'')
-                        # hpc in config is empty && -H has a value-> write down hpc value
-                        if hpc != "":
-                            content = content.replace(search.group(0), f"HPCARCH: \"{hpc}\"")
-                        elif len(aux) > 0:
-                            content = content.replace(search.group(0), f"HPCARCH: \"{aux}\"")
-                        else:
-                            content = content.replace(search.group(0), "HPCARCH: \"local\"")
-                        # the other case is aux!=0 that we dont care about val(hpc) because its a copyExpId
-                    if minimal_configuration:
-                        search = re.search('CUSTOM_CONFIG: .*', content, re.MULTILINE)
-                        if search is not None:
-                            content = content.replace(search.group(0),
-                                                      "CUSTOM_CONFIG: \"%PROJDIR%/" + git_as_conf + "\"")
-                        search = re.search('PROJECT_ORIGIN: .*', content, re.MULTILINE)
-                        if search is not None:
-                            content = content.replace(search.group(0), f"PROJECT_ORIGIN: \"{git_repo}\"")
-                        search = re.search('PROJECT_PATH: .*', content, re.MULTILINE)
-                        if search is not None:
-                            content = content.replace(search.group(0), f"PROJECT_PATH: \"{git_repo}\"")
-                        search = re.search('PROJECT_BRANCH: .*', content, re.MULTILINE)
-                        if search is not None:
-                            content = content.replace(search.group(0), f"PROJECT_BRANCH: \"{git_branch}\"")
-
-                    f.seek(0)
-                    f.write(content)
-                    f.truncate()
 
     @staticmethod
     def expid(description, hpc="", copy_id='', dummy=False, minimal_configuration=False,
@@ -1597,7 +1522,7 @@ class Autosubmit:
             raise AutosubmitCritical(f"Error while creating the experiment configuration: {str(e)}", 7011)
         # Change template values by default values specified from the commandline
         try:
-            Autosubmit.as_conf_default_values(exp_id, hpc, minimal_configuration, git_repo, git_branch, git_as_conf)
+            as_conf_default_values(Autosubmit.autosubmit_version, exp_id, hpc, minimal_configuration, git_repo, git_branch, git_as_conf)
         except Exception as e:
             try:
                 Autosubmit._delete_expid(exp_id, True)
@@ -2084,15 +2009,13 @@ class Autosubmit:
         # Could also load a backup from previous iteration.
         # The submit ready functions will cancel all job submitted if one submitted in that iteration had issues,
         # so it should be safe to recover from a backup without losing job ids
+
         if recover:
             Log.info("Recovering job_list")
         try:
             job_list = Autosubmit.load_job_list(
                 expid, as_conf, new=False, full_load=False, submitter=submitter,
-                check_failed_jobs=True)
-            # New runs, reset failed status to waiting
-            if not recover:
-                job_list.reset_jobs_on_first_run()
+                check_failed_jobs=True, run_mode=False)
 
         except IOError as e:
             raise AutosubmitError(
@@ -2201,7 +2124,7 @@ class Autosubmit:
 
     @staticmethod
     def run_experiment(expid: str, start_time: Optional[str] = None, start_after: Optional[str] = None,
-                       run_only_members: Optional[str] = None, profile=False) -> int:
+                       run_only_members: Optional[str] = None, profile: bool = False, trace: bool = False) -> int:
         """Runs and experiment (submitting all the jobs properly and repeating its execution in case of failure).
 
         :param expid: the experiment id
@@ -2209,14 +2132,18 @@ class Autosubmit:
         :param start_after: the expid after which the experiment should start
         :param run_only_members: the members to run
         :param profile: if True, the function will be profiled
+        :param trace_enabled: if True, the function will be traced
         :return: exit status
 
         """
         # Start profiling if the flag has been used
         if profile:
             from .profiler.profiler import Profiler
-            profiler = Profiler(expid)
+            profiler = Profiler(expid, trace_enabled=trace)
             profiler.start()
+            profiler.iteration_checkpoint(0,0)
+        else:
+            profiler = None
 
         # Initialize common folders'
         try:
@@ -2247,8 +2174,6 @@ class Autosubmit:
                     Log.warning('Git operational check disabled by user')
 
                 Log.debug("Running main running loop")
-                Log.warning("Known issue: Due to recent changes in Autosubmit's script generation, error line numbers in "
-                            "`script.cmd.err` files may be offset by ~5 lines. Please adjust accordingly when debugging.")
                 #########################
                 # AUTOSUBMIT - MAIN LOOP
                 #########################
@@ -2269,10 +2194,11 @@ class Autosubmit:
                                                                                       3650)  # (72h - 122h )
                 recovery_retrials = 0
                 Autosubmit._load_parameters(as_conf, job_list, submitter.platforms)
-                job_list.recover_logs(new_run=True)
                 # Save metadata.
                 as_conf.save()
                 while job_list.continue_run():
+                    if profile:
+                        profiler.iteration_checkpoint(len(job_list.graph.nodes()), len(job_list.graph_dict))
                     try:
                         if Autosubmit.exit:
                             if len(job_list.get_failed_from_db()) > 0:
@@ -2437,6 +2363,8 @@ class Autosubmit:
                     Log.info("Some jobs have failed and reached maximum retrials")
                 else:
                     Log.result("Run successful")
+                    if profile:
+                        profiler.iteration_checkpoint(len(job_list.graph.nodes()), len(job_list.graph_dict))
                     # Updating finish time for job data header
                     # Database is locked, may be related to my local db todo 4.1.1
                     try:
@@ -4457,7 +4385,7 @@ class Autosubmit:
 
     @staticmethod
     def detail(job_list):
-        current_length = len(job_list.get_job_list())
+        current_length = len(job_list.graph.nodes())
         if current_length > 1000:
             Log.warning(
                 "-d option: Experiment has too many jobs to be printed in the terminal. Maximum job quantity is 1000, your experiment has " + str(
@@ -4574,8 +4502,8 @@ class Autosubmit:
             elif final_status in [Status.QUEUING, Status.RUNNING] and (job.status == Status.SUSPENDED):
                 if job.platform_name and job.platform_name.upper() != "LOCAL":
                     job.platform.send_command("scontrol release " + f"{job.id}", ignore_log=True)
-        if job.status == Status.FAILED and job.status != final_status:
-            job._fail_count = 0
+        # if job.status == Status.FAILED and job.status != final_status:
+        #     job._fail_count = 0
         job.status = final_status
         Log.info("CHANGED: job: " + job.name + " status to: " + final)
         Log.status("CHANGED: job: " + job.name + " status to: " + final)
@@ -5147,8 +5075,6 @@ class Autosubmit:
                 performed_changes = {}
                 Log.info(f"The selected number of jobs to change is: {len(final_list)}")
                 for job in final_list:
-                    if final_status in [Status.WAITING, Status.PREPARED, Status.DELAYED, Status.READY]:
-                        job.fail_count = 0
                     if job.status in [Status.QUEUING, Status.RUNNING,
                                       Status.SUBMITTED] and job.platform.name not in definitive_platforms:
                         Log.printlog(f"JOB: [{job.platform.name}] is ignored as the [{job.name}] platform is currently"
@@ -5379,11 +5305,9 @@ class Autosubmit:
         return result
 
     @staticmethod
-    def testcase(description, chunks=None, member=None, start_date=None, hpc=None, copy_id=None,
-                 minimal_configuration=False, git_repo=None, git_branch=None, git_as_conf=None,
-                 use_local_minimal=False):
-        """
-        Method to conduct a test for a given experiment. It creates a new experiment for a given experiment with a
+    def testcase(description, hpc=None, copy_id=None, minimal_configuration=False, git_repo=None, git_branch=None,
+                 git_as_conf=None, use_local_minimal=False):
+        """Method to conduct a test for a given experiment. It creates a new experiment for a given experiment with a
         given number of chunks with a random start date and a random member to be run on a random HPC.
         :param description: description of the experiment
         :param hpc: HPC to be used by the test. If None, a random HPC will be chosen
