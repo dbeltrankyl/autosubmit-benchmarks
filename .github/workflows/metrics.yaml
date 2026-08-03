@@ -130,8 +130,16 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
+            // Fetch the live label state from the API instead of trusting the
+            // event payload: GitHub's `labeled` webhook payload can be stale or
+            // miss the label that was just added, which silently turns off the
+            // whole benchmark/report/baseline chain.
             if (context.eventName === 'pull_request') {
-              const labels = (context.payload.pull_request && context.payload.pull_request.labels) || [];
+              const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+              });
               core.setOutput('label_present',
                 labels.some((l) => l.name === 'perf-benchmark') ? 'true' : 'false');
             } else {
