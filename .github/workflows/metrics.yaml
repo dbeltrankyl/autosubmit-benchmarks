@@ -174,24 +174,24 @@ jobs:
           # Suite: quick by default, full on /metrics_full.
           if [ "${{ github.event_name }}" == "issue_comment" ] && \
              [[ "${{ github.event.comment.body }}" == *"/metrics_full"* ]]; then
-            echo "test_type=profilelong"
+            echo "test_type=profilelong" >> "$GITHUB_OUTPUT"
           else
-            echo "test_type=profile"
+            echo "test_type=profile" >> "$GITHUB_OUTPUT"
           fi
           # Force promotion only on /metrics_promote.
           if [ "${{ github.event_name }}" == "issue_comment" ] && \
              [[ "${{ github.event.comment.body }}" == *"/metrics_promote"* ]]; then
-            echo "force_promote=true"
+            echo "force_promote=true" >> "$GITHUB_OUTPUT"
           else
-            echo "force_promote=false"
+            echo "force_promote=false" >> "$GITHUB_OUTPUT"
           fi
           # Run the benchmark for labeled PRs and for manual commands.
           if [ "${{ github.event_name }}" == "issue_comment" ]; then
-            echo "should_run=true"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
           elif [ "${{ steps.label.outputs.label_present }}" == "true" ]; then
-            echo "should_run=true"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "should_run=false"
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout code
