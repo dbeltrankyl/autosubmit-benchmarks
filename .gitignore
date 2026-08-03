@@ -30,3 +30,8 @@ dockerfiles/authorized_keys
 venv/
 .ipynb_checkpoints
 .atl
+.actrc
+
+.benchmarks/data/
+.benchmarks/artifacts/
+.benchmarks/reference/

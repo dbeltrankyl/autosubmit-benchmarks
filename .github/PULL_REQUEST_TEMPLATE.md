@@ -17,3 +17,25 @@ Thanks for your contribution! Please:
 - [ ] Changelog entry included in `CHANGELOG.md` if this is a change that can affect users.
 - [ ] Documentation updated.
 - [ ] If this is a bug fix, PR should include a link to the issue (e.g. `Closes #1234`).
+
+<!--
+### Performance benchmarks
+
+Autosubmit runs a performance gate on PRs labeled `perf-benchmark`: the PR is
+benchmarked against the stored master baseline and the result is posted as a
+comment.
+
+* Add the `perf-benchmark` label if this PR can affect runtime performance
+  (e.g. job list, monitor loop, database layer, wrappers, platform handling).
+  Adding labels requires write/triage access -- if you can't, say so in the
+  description so a maintainer can label it.
+* Once labeled, the merge button stays disabled until the benchmark completes
+  (quick suite, usually a few minutes).
+* Maintainers can comment `/metrics_full` for the heavy suite, and
+  `/metrics_promote` to re-baseline after an intentional change (team members
+  and users in MAINTAINERS.md only).
+* If the report shows ⚠️ regressions, review the comparison before merging:
+  either fix the regression or explicitly accept the tradeoff.
+
+See CONTRIBUTING.md > Benchmarks for details.
+-->

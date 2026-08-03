@@ -94,7 +94,8 @@ tests = [
 benchmark = [
     "pandas",
     "matplotlib",
-    "tabulate"
+    "tabulate",
+    "pytest-benchmark"
 ]
 docs = [
     "livereload",

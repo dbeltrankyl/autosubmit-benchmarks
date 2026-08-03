@@ -156,6 +156,99 @@ $ docker run -d --name some-postgres \
     postgres 
 ```
 
+## Benchmarks
+
+Autosubmit includes a performance benchmark suite to keep track of the cost of
+`create`, `run`, `recovery` and `setstatus` for experiments of increasing size.
+The tests live in `test/integration/commands/test_performance.py` and are marked
+with `profile` (quick) and `profilelong`. They use [pytest-benchmark](https://pytest-benchmark.readthedocs.io)
+and the Autosubmit Profiler; the wall-clock time is measured by pytest-benchmark
+and the profiler metrics (memory, DB sizes, file descriptors, ...) are stored in
+each run's `extra_info`.
+
+The results are stored as pytest-benchmark JSON runs under `.benchmarks/data`
+and a comparison against the stored baseline is produced by
+`.benchmarks/compare_results.py` using the thresholds in
+`.benchmarks/thresholds.yml`. Both directories are git-ignored; the scripts are
+tracked.
+
+### How it is triggered
+
+The performance check runs **before merge** so regressions are caught in time,
+and the baseline is updated by **guarded promotion** (a run that regresses is
+never promoted).
+
+* **PR gate (required status check)**: the `metrics` workflow runs on every
+  pull request. It is a cheap no-op unless the PR carries the `perf-benchmark`
+  label, in which case the PR is benchmarked against the baseline and the merge
+  button stays disabled until the benchmark completes. Add the label to PRs
+  that may affect runtime performance (requires write/triage access; if you
+  cannot add labels, say so in the PR description so a maintainer can). See
+  the PR template and the "Set up the merge gate" note below.
+* **Manually**: a member of the `BSC-ES/autosubmit` team (or a user listed in
+  `MAINTAINERS.md`) comments on a PR:
+  * `/metrics` — quick suite
+  * `/metrics_full` — full suite 
+  * `/metrics_promote` — quick suite, then force-promote the result as the new
+    baseline (overrides the regression guard, e.g. after an intentional change)
+* **Weekly safety net** (`metrics-cron` workflow): every Monday, the full suite
+  runs on the latest `master`. If it has not regressed, the baseline is
+  refreshed; if it has, the regression is reported in the job summary and the
+  baseline is kept. This catches slow cumulative drift across many PRs.
+
+The PR results are posted as a comment comparing them against the baseline,
+flagging regressions beyond the configured thresholds as warnings.
+
+### The baseline
+
+The baseline lives on the `benchmark-reference` branch (`.benchmarks/reference`),
+and every promotion is a commit, so its history is preserved. To restore a
+previous baseline after a bad merge:
+
+```bash
+git fetch origin benchmark-reference
+git checkout <previous-baseline-sha> -- .benchmarks/reference
+git commit -m "Restore baseline before merge <merge-sha>"
+git push origin HEAD:benchmark-reference
+```
+
+### Set up the merge gate (one-time, repo admin)
+
+1. Create the `perf-benchmark` label (Settings > Labels).
+2. In branch protection for the default branch, enable **Require status
+   checks** and select **`performance-benchmark`** (the job name in
+   `.github/workflows/metrics.yaml`).
+
+### Running the benchmarks locally
+
+Install the benchmark dependencies and run the suite (Docker and a Slurm
+container are required for the `run`, `recovery` and `setstatus` scenarios; the
+`create` scenarios can run without them):
+
+```bash
+$ pip install -e .[all]
+$ pytest -m profile -n 0 --benchmark-save=mylabel \
+    test/integration/commands/test_performance.py
+```
+
+> NOTE: run the suite with `-n 0`. pytest-benchmark cannot save runs under
+> `pytest-xdist` parallelism.
+
+To compare two runs (e.g. a local baseline against a newer run) and generate the
+markdown report and plot:
+
+```bash
+$ python .benchmarks/compare_results.py \
+    --current .benchmarks/data/current.json \
+    --previous .benchmarks/data/baseline.json \
+    --thresholds .benchmarks/thresholds.yml \
+    --version "$(cat VERSION)" \
+    --output-dir .benchmarks/artifacts
+```
+
+The report is written to `.benchmarks/artifacts/summary_<version>.md` and the
+plot to `summary_<version>.png`.
+
 ## Test GitHub Actions locally
 
 Prerequisites: `docker`, `act` and a GitHub token.
@@ -181,7 +274,16 @@ Then you can run `act` with:
 ```bash
 $ act -j metrics -P ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-latest -e event.json -s GITHUB_TOKEN="$GITHUB_TOKEN" --artifact-server-path /tmp/artifacts
 ```
-replace `metrics_markdown` with the name of the job you want to run
+replace `metrics` with the name of the job you want to run (`authorize`,
+`metrics`, `report`, `update-baseline`).
+
+> NOTE: `act` runs the workflow file from your working tree, so it can validate
+> workflow changes before they are merged. Under `act` the authorization gate
+> is bypassed (the org-level APIs are not reachable) and the results are
+> printed to the console instead of posting a PR comment. The `run`,
+> `recovery` and `setstatus` benchmark scenarios start a Slurm container via
+> testcontainers, which requires Docker-in-Docker; use `-k create` in the
+> benchmark step (or run those scenarios locally with `pytest`) to avoid it.
 
 For debugging purposes, you can also enter the container where the job is
 being executed with:

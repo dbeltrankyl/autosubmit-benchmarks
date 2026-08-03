@@ -1,8 +1,36 @@
 name: metrics
 
+# This workflow benchmarks Autosubmit performance and keeps a baseline of the
+# "last known good" results on the `benchmark-reference` branch.
+#
+# Trigger modes:
+#   * PR gate: on every pull_request the `metrics` job runs as a REQUIRED
+#     status check. It is a cheap no-op unless the PR has the
+#     `perf-benchmark` label (which needs write/triage access to add), in which
+#     case it benchmarks the PR against the baseline and greys the merge button
+#     until the benchmark completes.
+#   * Manual: a maintainer (member of the BSC-ES/autosubmit team, or listed in
+#     MAINTAINERS.md on the default branch) comments on a PR:
+#       - `/metrics`          quick suite
+#       - `/metrics_full`     full suite (includes run_heavy)
+#       - `/metrics_promote`  quick suite and force-promote the result as the
+#                             new baseline (overrides the regression guard)
+#
+# Baseline promotion is GUARDED: a run that regresses vs the current baseline
+# is never promoted, so the baseline cannot ratchet downward. Set up branch
+# protection on the default branch to require the `performance-benchmark` check
+# (Settings > Branches > Require status checks).
+#
+# NOTE: `issue_comment` workflows run the version of this file on the DEFAULT
+# branch, not the PR head. Changes here only take effect after merging.
+# NOTE: the authorization allowlist is read from MAINTAINERS.md on the
+# default branch (currently `master`) on purpose, so PRs cannot self-authorize.
+
 on:
+  pull_request:
+    types: [opened, synchronize, reopened]
   issue_comment:
-    types: [created, edited]
+    types: [created]
 
 permissions:
   contents: write
@@ -10,116 +38,235 @@ permissions:
   issues: write
   actions: write
 
+# Only one benchmark workflow at a time: concurrent runs would race when
+# pushing the baseline branch (shared with the weekly metrics-cron workflow).
+concurrency:
+  group: benchmark
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: '3.11'
+
 jobs:
-  metrics:
-    if: >
-      github.event.issue.pull_request &&
-      (
-      contains(github.event.comment.body, '/metrics_markdown') ||
-      contains(github.event.comment.body, '/metrics_plot') ||
-      contains(github.event.comment.body, '/metrics_full_markdown') ||
-      contains(github.event.comment.body, '/metrics_full_plot') ||
-      contains(github.event.comment.body, '/metrics') ||
-      contains(github.event.comment.body, '/metrics_upload') ||
-      contains(github.event.comment.body, '/metrics_full')
-      )
+  authorize:
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.autosubmit_version.outputs.version }}
-      head_ref: ${{ steps.pr.outputs.head_ref }}
+      allowed: ${{ steps.auth.outputs.allowed }}
+    steps:
+      - name: Check the comment author is allowed
+        id: auth
+        uses: actions/github-script@v8
+        env:
+          ACT: ${{ env.ACT }}
+        with:
+          script: |
+            // PR-gate runs are authorized by the label itself; only the manual
+            // comment commands need this check.
+            if (context.eventName !== 'issue_comment') {
+              core.setOutput('allowed', 'true');
+              return;
+            }
+            // Local `act` runs must not hit the org-level APIs.
+            if (process.env.ACT) {
+              core.setOutput('allowed', 'true');
+              return;
+            }
+            const username = context.payload.comment.user.login;
+            let allowed = false;
+            // (1) Members of the BSC-ES/autosubmit team are allowed.
+            try {
+              await github.rest.teams.getMembershipForUserInOrg({
+                org: 'BSC-ES',
+                team_slug: 'autosubmit',
+                username,
+              });
+              allowed = true;
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
+            // (2) Users listed in MAINTAINERS.md on the default branch.
+            if (!allowed) {
+              try {
+                const { data } = await github.rest.repos.getContent({
+                  owner: 'BSC-ES',
+                  repo: 'autosubmit',
+                  path: 'MAINTAINERS.md',
+                  ref: 'master',
+                });
+                const text = Buffer.from(data.content, 'base64').toString();
+                allowed = new RegExp(`@${username}\\b`).test(text);
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+            }
+            core.setOutput('allowed', String(allowed));
+
+  metrics:
+    name: performance-benchmark
+    needs: authorize
+    if: >
+      github.event_name == 'pull_request' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        needs.authorize.outputs.allowed == 'true' &&
+        contains(github.event.comment.body, '/metrics')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    outputs:
+      version: ${{ steps.as_version.outputs.version }}
       head_repo: ${{ steps.pr.outputs.head_repo }}
+      head_ref: ${{ steps.pr.outputs.head_ref }}
       head_sha: ${{ steps.pr.outputs.head_sha }}
-      test_type: ${{ steps.determine_test_type.outputs.test_type }}
+      issue_number: ${{ steps.pr.outputs.issue_number }}
+      test_type: ${{ steps.scope.outputs.test_type }}
+      should_run: ${{ steps.scope.outputs.should_run }}
+      force_promote: ${{ steps.scope.outputs.force_promote }}
 
     steps:
-      - name: Get PR info
+      - name: Check for the perf-benchmark label
+        id: label
+        uses: actions/github-script@v8
+        with:
+          script: |
+            if (context.eventName === 'pull_request') {
+              const labels = (context.payload.pull_request && context.payload.pull_request.labels) || [];
+              core.setOutput('label_present',
+                labels.some((l) => l.name === 'perf-benchmark') ? 'true' : 'false');
+            } else {
+              core.setOutput('label_present', 'false');
+            }
+
+      - name: Get PR / commit info
         id: pr
         uses: actions/github-script@v8
         with:
           script: |
-            const pr = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-            });
-            core.setOutput('head_ref', pr.data.head.ref);
-            core.setOutput('head_repo', pr.data.head.repo.full_name);
-            core.setOutput('head_sha', pr.data.head.sha);
+            if (context.eventName === 'issue_comment') {
+              const pr = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+              });
+              core.setOutput('head_repo', pr.data.head.repo.full_name);
+              core.setOutput('head_ref', pr.data.head.ref);
+              core.setOutput('head_sha', pr.data.head.sha);
+              core.setOutput('issue_number', String(context.issue.number));
+            } else {
+              core.setOutput('head_repo', context.payload.pull_request.head.repo.full_name);
+              core.setOutput('head_ref', context.payload.pull_request.head.ref);
+              core.setOutput('head_sha', context.payload.pull_request.head.sha);
+              core.setOutput('issue_number', String(context.payload.pull_request.number));
+            }
 
-      - name: Determine test type
-        id: determine_test_type
+      - name: Determine benchmark scope
+        id: scope
         run: |
-          comment_body="${{ github.event.comment.body }}"
-          if [[ "$comment_body" == *"/metrics_full"* ]]; then
-            echo "test_type=profilelong" >> "$GITHUB_OUTPUT"
-            echo "Running full profile tests (profilelong)"
+          # Suite: quick by default, full on /metrics_full.
+          if [ "${{ github.event_name }}" == "issue_comment" ] && \
+             [[ "${{ github.event.comment.body }}" == *"/metrics_full"* ]]; then
+            echo "test_type=profilelong"
           else
-            echo "test_type=profile" >> "$GITHUB_OUTPUT"
-            echo "Running quick profile tests (profile)"
+            echo "test_type=profile"
+          fi
+          # Force promotion only on /metrics_promote.
+          if [ "${{ github.event_name }}" == "issue_comment" ] && \
+             [[ "${{ github.event.comment.body }}" == *"/metrics_promote"* ]]; then
+            echo "force_promote=true"
+          else
+            echo "force_promote=false"
+          fi
+          # Run the benchmark for labeled PRs and for manual commands.
+          if [ "${{ github.event_name }}" == "issue_comment" ]; then
+            echo "should_run=true"
+          elif [ "${{ steps.label.outputs.label_present }}" == "true" ]; then
+            echo "should_run=true"
+          else
+            echo "should_run=false"
           fi
 
-      - name: Checkout PR code
+      - name: Checkout code
+        if: steps.scope.outputs.should_run == 'true'
         uses: actions/checkout@v6
         with:
           repository: ${{ steps.pr.outputs.head_repo }}
           ref: ${{ steps.pr.outputs.head_ref }}
           fetch-depth: 0
 
+      - name: Get Autosubmit version
+        id: as_version
+        if: steps.scope.outputs.should_run == 'true'
+        run: |
+          echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
       - name: Set up Python
+        if: steps.scope.outputs.should_run == 'true'
         uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
       - name: Install dependencies
+        if: steps.scope.outputs.should_run == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -e .[all]
 
-      - name: Get Autosubmit version
-        id: autosubmit_version
+      - name: Fetch baseline results
+        id: baseline
+        if: steps.scope.outputs.should_run == 'true'
         run: |
-          version=$(cat VERSION)
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          git remote add base "https://github.com/${{ github.repository }}.git"
+          git fetch base benchmark-reference --depth 1 || echo "no baseline branch yet"
+          if git cat-file -e refs/remotes/base/benchmark-reference:.benchmarks/reference 2>/dev/null; then
+            git checkout refs/remotes/base/benchmark-reference -- .benchmarks/reference
+            echo "baseline_found=true" >> "$GITHUB_OUTPUT"
+            echo "Using baseline from benchmark-reference branch"
+          else
+            echo "baseline_found=false" >> "$GITHUB_OUTPUT"
+            echo "No baseline found, running without comparison"
+          fi
+          mkdir -p .benchmarks/reference
 
-      - name: Run profile tests
+      - name: Run benchmarks
+        if: steps.scope.outputs.should_run == 'true'
         run: |
-          pytest -m "${{ steps.determine_test_type.outputs.test_type }}" -n 0 test/integration
-          # rename the file to include the enviroment used for testing
+          short_sha=$(echo "${{ steps.pr.outputs.head_sha }}" | cut -c1-7)
+          args=(
+            -m "${{ steps.scope.outputs.test_type }}"
+            -n 0
+            --benchmark-storage=file://.benchmarks/data
+            --benchmark-save="${{ steps.as_version.outputs.version }}-${short_sha}"
+            test/integration/commands/test_performance.py
+          )
+          # BENCHMARK_K is only set when running the workflow locally with act
+          # (e.g. -k create) to avoid the Docker-in-Docker slurm scenarios.
+          if [ -n "${BENCHMARK_K:-}" ]; then
+            args+=( -k "$BENCHMARK_K" )
+          fi
+          pytest "${args[@]}"
 
-      - name: Upload test artifacts
+      - name: Upload benchmark artifacts
+        if: steps.scope.outputs.should_run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: performance-metrics-${{ steps.autosubmit_version.outputs.version }}
-          path: .benchmarks/artifacts
+          name: performance-metrics-${{ steps.as_version.outputs.version }}
+          path: |
+            .benchmarks/data
+            .benchmarks/reference
           retention-days: 7
 
-      - name: Commit and push test results
-        if: >
-          github.event.issue.pull_request && contains(github.event.comment.body, '/metrics_upload')
-        run: |
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git config --local user.name "github-actions[bot]"
-          mkdir -p .benchmarks/reference
-          cp .benchmarks/artifacts/* .benchmarks/reference/
-          git add .benchmarks/reference
-          git commit -m "Add benchmark results for version ${{ steps.autosubmit_version.outputs.version }} (${{ steps.determine_test_type.outputs.test_type }})"
-          git push
-
-  metrics_markdown:
+  report:
     needs: metrics
-    if: >
-      github.event.issue.pull_request &&
-      (
-      contains(github.event.comment.body, '/metrics_markdown') ||
-      contains(github.event.comment.body, '/metrics_full_markdown') ||
-      contains(github.event.comment.body, '/metrics') ||
-      contains(github.event.comment.body, '/metrics_full')
-      )
+    if: always() && needs.metrics.result == 'success' && needs.metrics.outputs.should_run == 'true'
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
+    outputs:
+      regressions_detected: ${{ steps.verdict.outputs.regressions_detected }}
+      force_promote: ${{ needs.metrics.outputs.force_promote }}
     steps:
-      - name: Checkout PR code
+      - name: Checkout code
         uses: actions/checkout@v6
         with:
           repository: ${{ needs.metrics.outputs.head_repo }}
@@ -129,7 +276,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
 
       - name: Install dependencies
@@ -137,22 +284,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[all]
 
-      - name: Download artifacts
+      - name: Download benchmark artifacts
         uses: actions/download-artifact@v4
         with:
           name: performance-metrics-${{ needs.metrics.outputs.version }}
-          path: .benchmarks/artifacts
+          path: .benchmarks
 
-      - name: Generate markdown summary
+      - name: Generate comparison report
         run: |
-          python .benchmarks/generate_markdown.py --version "${{ needs.metrics.outputs.version }}"
+          python .benchmarks/compare_results.py \
+            --current .benchmarks/data \
+            --previous .benchmarks/reference \
+            --thresholds .benchmarks/thresholds.yml \
+            --version "${{ needs.metrics.outputs.version }}" \
+            --current-label "PR #${{ needs.metrics.outputs.issue_number }} (${{ needs.metrics.outputs.head_sha }})" \
+            --previous-label "master baseline" \
+            --output-dir .benchmarks/artifacts
 
-      - name: Upload benchmark artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary_${{ needs.metrics.outputs.version }}_${{ needs.metrics.outputs.test_type }}.md
-          path: .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}.md
-          retention-days: 7
+      - name: Read comparison verdict
+        id: verdict
+        run: |
+          jq -r '.regressions_detected' \
+            .benchmarks/artifacts/report_${{ needs.metrics.outputs.version }}.json \
+            | { read v; echo "regressions_detected=$v" >> "$GITHUB_OUTPUT"; }
 
       - name: Comment results
         uses: actions/github-script@v8
@@ -161,15 +315,16 @@ jobs:
           script: |
             const fs = require('fs');
             const version = '${{ needs.metrics.outputs.version }}';
-            const testType = '${{ needs.metrics.outputs.test_type }}';
-            const summaryPath = `.benchmarks/artifacts/summary_${version}.md`;
-            const summary = fs.readFileSync(summaryPath, 'utf8');
+            const summary = fs.readFileSync(`.benchmarks/artifacts/summary_${version}.md`, 'utf8');
+            const plot = fs.readFileSync(`.benchmarks/artifacts/summary_${version}.png`, { encoding: 'base64' });
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number,
+              issue_number: Number('${{ needs.metrics.outputs.issue_number }}'),
               body: [
-                `## Benchmark Results (${testType})`,
+                `## Benchmark Results (${{ needs.metrics.outputs.test_type }})`,
+                '',
+                `![Plot Results](data:image/png;base64,${plot})`,
                 '',
                 summary,
                 '',
@@ -180,88 +335,49 @@ jobs:
       - name: Display results (ACT)
         if: ${{ env.ACT }}
         run: |
-            echo "Benchmark Results (Local Run - ${{ needs.metrics.outputs.test_type }})"
-            echo "================================"
-            cat .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}.md
-            echo ""
+          echo "Benchmark Results (Local Run - ${{ needs.metrics.outputs.test_type }})"
+          echo "================================"
+          cat .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}.md
+          echo ""
+          echo "Plot saved to .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}.png"
 
-  metrics_plot:
-    needs: metrics
+  update-baseline:
+    needs: [report, metrics]
     if: >
-      github.event.issue.pull_request &&
-      (
-      contains(github.event.comment.body, '/metrics_plot') ||
-      contains(github.event.comment.body, '/metrics_full_plot') ||
-      contains(github.event.comment.body, '/metrics') ||
-      contains(github.event.comment.body, '/metrics_full')
-      )
+      always() && needs.report.result == 'success' && needs.metrics.result == 'success' &&
+      (needs.report.outputs.regressions_detected == 'false' || needs.report.outputs.force_promote == 'true')
     runs-on: ubuntu-latest
-
+    timeout-minutes: 10
     steps:
-      - name: Checkout PR code
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          repository: ${{ needs.metrics.outputs.head_repo }}
-          ref: ${{ needs.metrics.outputs.head_ref }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .[all]
-
-      - name: Download artifacts
+      - name: Download benchmark artifacts
         uses: actions/download-artifact@v4
         with:
           name: performance-metrics-${{ needs.metrics.outputs.version }}
-          path: .benchmarks/artifacts
+          path: artifact
 
-      - name: Generate plot summary
+      - name: Update the benchmark-reference branch
         run: |
-          python .benchmarks/generate_plot.py --version "${{ needs.metrics.outputs.version }}"
-
-      - name: Upload plot artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: summary_${{ needs.metrics.outputs.version }}_${{ needs.metrics.outputs.test_type }}.png
-          path: .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}.png
-          retention-days: 7
-
-      - name: Comment results
-        uses: actions/github-script@v8
-        if: ${{ !env.ACT }}
-        with:
-          script: |
-            const fs = require('fs');
-            const version = '${{ needs.metrics.outputs.version }}';
-            const testType = '${{ needs.metrics.outputs.test_type }}';
-            const plotSummaryPath = `.benchmarks/artifacts/summary_${version}.png`;
-            const plotSummary = fs.readFileSync(plotSummaryPath, { encoding: 'base64' });
-            const plotUri = `![Plot Results](data:image/png;base64,${plotSummary})`;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: [
-                `## Plot Results (${testType})`,
-                '',
-                plotUri,
-                '',
-                'Artifacts: see the workflow run summary for download.'
-              ].join('\n')
-            });
-
-      - name: Display results (ACT)
-        if: ${{ env.ACT }}
-        run: |
-            echo "Plot Results (Local Run - ${{ needs.metrics.outputs.test_type }})"
-            echo "================================"
-            echo "plot image saved to .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}.png"
-            echo "================================"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git remote add base "https://github.com/${{ github.repository }}.git"
+          git fetch base benchmark-reference --depth 1 || true
+          if git rev-parse --verify refs/remotes/base/benchmark-reference >/dev/null 2>&1; then
+            git checkout -B benchmark-reference refs/remotes/base/benchmark-reference
+          else
+            git checkout --orphan benchmark-reference
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+          rm -rf .benchmarks/reference
+          mkdir -p .benchmarks/reference
+          cp -r artifact/data/. .benchmarks/reference/
+          git add .benchmarks/reference
+          git commit -m "Update benchmark baseline for ${{ needs.metrics.outputs.version }} (${{ needs.metrics.outputs.head_sha }})" || {
+            echo "No changes to commit"
+            exit 0
+          }
+          git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" benchmark-reference
