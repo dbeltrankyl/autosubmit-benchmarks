@@ -34,7 +34,7 @@ comment.
 * Maintainers can comment `/metrics_full` for the heavy suite, and
   `/metrics_promote` to re-baseline after an intentional change (team members
   and users in MAINTAINERS.md only).
-* If the report shows ⚠️ regressions, review the comparison before merging:
+* If the report shows regressions, review the comparison before merging:
   either fix the regression or explicitly accept the tradeoff.
 
 See CONTRIBUTING.md > Benchmarks for details.
