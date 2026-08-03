@@ -88,10 +88,10 @@ jobs:
             if (!allowed) {
               try {
                 const { data } = await github.rest.repos.getContent({
-                  owner: 'BSC-ES',
-                  repo: 'autosubmit',
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
                   path: 'MAINTAINERS.md',
-                  ref: 'master',
+                  ref: context.repository.default_branch,
                 });
                 const text = Buffer.from(data.content, 'base64').toString();
                 allowed = new RegExp(`@${username}\\b`).test(text);
