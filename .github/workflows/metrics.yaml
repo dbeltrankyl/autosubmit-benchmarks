@@ -28,7 +28,7 @@ name: metrics
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   issue_comment:
     types: [created]
 
