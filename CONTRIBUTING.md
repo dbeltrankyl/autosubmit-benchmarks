@@ -1,4 +1,4 @@
-dummy_pr
+dummy_prb
 ## Autosubmit contribution guide
 
 **Documentation:** http://autosubmit.readthedocs.io/en/latest/
