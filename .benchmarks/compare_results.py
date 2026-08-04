@@ -51,6 +51,18 @@ METRIC_COLUMNS = [
     "OBJ GROW",
 ] + EXACT_METRICS
 
+# Profiler growth metrics are only meaningful for the `run` scenarios;
+_GROW_METRICS = {"FD GROW", "MEM GROW(MIB)", "OBJ GROW"}
+_NO_GROW_TEST_TYPES = {"create", "recovery", "setstatus"}
+
+
+def _allowed_metrics(test_type: str) -> set[str]:
+    """Return the metric names to report for the given test type."""
+    if test_type in _NO_GROW_TEST_TYPES:
+        return set(METRIC_COLUMNS) - _GROW_METRICS
+    return set(METRIC_COLUMNS)
+
+
 _TABLE_COLUMNS = ["test type", "ID", "metric", "baseline", "current", "delta %", "verdict"]
 
 
@@ -169,6 +181,8 @@ def evaluate(current: pd.DataFrame, previous: pd.DataFrame | None, thresholds: d
             continue
 
         for metric in METRIC_COLUMNS:
+            if metric not in _allowed_metrics(test_type):
+                continue
             cur_val = cur.get(metric)
             prev_val = prev.get(metric) if baseline_ok else None
             if cur_val is None or pd.isna(cur_val):
@@ -254,37 +268,113 @@ def render_markdown(report: pd.DataFrame, version: str, current_label: str,
     return "\n".join(lines)
 
 
-def render_plot(current: pd.DataFrame, previous: pd.DataFrame | None, version: str, output_dir: Path) -> Path:
-    """Render bar plots of time and memory per scenario, current vs baseline."""
+def _abbreviate_id(run_id: str) -> str:
+    """Shorten a scenario id like ``fc0_fc1_fc2_fc3_2_10_ftcs`` to ``4m/2c/10s·ftcs``."""
+    parts = run_id.split("_")
+    members = sum(1 for part in parts if part.startswith("fc"))
+    rest = parts[members:]
+    if len(rest) >= 2:
+        label = f"{members}m/{rest[0]}c/{rest[1]}s"
+        tail = "·".join(rest[2:])
+        return f"{label}·{tail}" if tail else label
+    return run_id
+
+
+def render_plot(current: pd.DataFrame, previous: pd.DataFrame | None, report: pd.DataFrame,
+                version: str, output_dir: Path) -> Path:
+    """Render a facet-grid comparison of the measured metrics, current vs baseline.
+
+    One row per test type, one panel per metric that is meaningful for it
+    (profiler growth metrics are only shown for ``run``/``run_heavy``).
+    Regressions flagged in ``report`` are highlighted in red.
+    """
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     test_types = list(current.index.get_level_values("test type").unique())
-    fig, axes = plt.subplots(len(test_types), 2, figsize=(14, 4 * len(test_types)),
-                             squeeze=False)
-    fig.suptitle(f"Autosubmit Performance Metrics - Version {version}", fontsize=16)
+    warn = set()
+    if not report.empty:
+        for _, row in report.iterrows():
+            if row["verdict"] == "WARN":
+                warn.add((row["test type"], row["ID"], row["metric"]))
+
+    n_plot_metrics = [len([c for c in METRIC_COLUMNS
+                           if c not in EXACT_METRICS and c in _allowed_metrics(test_type)
+                           and current[c].notna().any()]) for test_type in test_types]
+    fig = plt.figure(figsize=(16, 2.6 * len(test_types) + 0.4))
+    gs = fig.add_gridspec(len(test_types), 1, hspace=0.55, top=0.88, bottom=0.07,
+                          left=0.07, right=0.99)
+    fig.suptitle(f"Autosubmit Performance Metrics - Version {version}", fontsize=15)
 
     for i, test_type in enumerate(test_types):
         cur = current.xs(test_type, level="test type")
         prev = previous.xs(test_type, level="test type") if previous is not None else pd.DataFrame()
         ids = list(cur.index)
-        x = range(len(ids))
+        x = list(range(len(ids)))
+        width = 0.38
 
-        for col, ax in zip(["Time Taken(Seconds)", "Memory consumption(MiB)"], axes[i]):
+        metrics = [c for c in METRIC_COLUMNS
+                   if c not in EXACT_METRICS and c in _allowed_metrics(test_type)
+                   and current[c].notna().any()]
+        if not metrics:
+            ax = fig.add_subplot(gs[i])
+            ax.axis("off")
+            continue
+
+        sub = gs[i].subgridspec(1, len(metrics), wspace=0.3)
+        for j, col in enumerate(metrics):
+            ax = fig.add_subplot(sub[0, j])
             cur_vals = pd.to_numeric(cur[col], errors="coerce")
-            ax.bar(x, cur_vals.fillna(0), color="blue", alpha=0.6, label="Current")
-            if not prev.empty and col in prev.columns:
-                prev_vals = pd.to_numeric(prev[col], errors="coerce")
-                if set(ids).intersection(prev.index):
-                    ax.bar(x, prev_vals.fillna(0), color="orange", alpha=0.25, label="Baseline")
-            ax.set_title(f"{test_type} - {col}")
-            ax.set_xticks(list(x))
-            ax.set_xticklabels(ids, rotation=45, ha="right")
-            ax.legend(loc="upper left")
+            if prev is not None and not prev.empty and col in prev.columns:
+                prev_aligned = pd.to_numeric(prev[col].reindex(ids), errors="coerce")
+            else:
+                prev_aligned = pd.Series(pd.NA, index=ids)
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+            colors = ["#d62728" if (test_type, run_id, col) in warn else "#1f77b4" for run_id in ids]
+            ax.bar([p - width / 2 for p in x], cur_vals.fillna(0), width,
+                   color=colors, alpha=0.85, label="Current")
+            ax.bar([p + width / 2 for p in x], prev_aligned.fillna(0), width,
+                   color="#ff7f0e", alpha=0.45, label="Baseline")
+
+            # Value annotations only when the panel is not crowded.
+            if len(ids) <= 6:
+                for p, v in zip(x, cur_vals):
+                    if pd.notna(v):
+                        ax.annotate(f"{v:.1f}", (p - width / 2, v), textcoords="offset points",
+                                    xytext=(0, 3), ha="center", fontsize=7)
+                for p, v in zip(x, prev_aligned):
+                    if pd.notna(v):
+                        ax.annotate(f"{v:.1f}", (p + width / 2, v), textcoords="offset points",
+                                    xytext=(0, 3), ha="center", fontsize=6, color="#a05d0e")
+
+            for (tt, run_id, met) in warn:
+                if tt == test_type and met == col and run_id in ids:
+                    k = ids.index(run_id)
+                    delta = _safe_pct(cur_vals.iloc[k], prev_aligned.iloc[k])
+                    if delta is not None:
+                        ax.annotate(f"▲ {delta:+.1f}%", (x[k] - width / 2, cur_vals.iloc[k]),
+                                    textcoords="offset points", xytext=(0, 8), ha="center",
+                                    fontsize=8, color="#d62728", fontweight="bold")
+
+            ax.set_title(f"{test_type} · {col}", fontsize=9)
+            ax.set_xticks(x)
+            ax.set_xticklabels([_abbreviate_id(run_id) for run_id in ids],
+                               rotation=45, ha="right", fontsize=7)
+
+            vals = cur_vals.dropna()
+            if len(vals) > 1 and (vals > 0).all() and vals.max() / vals.min() > 50:
+                ax.set_yscale("log")
+
+    handles = [plt.Rectangle((0, 0), 1, 1, color="#1f77b4", alpha=0.85, label="Current")]
+    if previous is not None and not previous.empty:
+        handles.append(plt.Rectangle((0, 0), 1, 1, color="#ff7f0e", alpha=0.45, label="Baseline"))
+    if warn:
+        handles.append(plt.Rectangle((0, 0), 1, 1, color="#d62728", alpha=0.85, label="Regression"))
+    fig.legend(handles=handles, loc="upper center", ncol=len(handles),
+               frameon=False, bbox_to_anchor=(0.5, 0.965))
+
     out = output_dir / f"summary_{version}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, bbox_inches="tight")
@@ -338,7 +428,7 @@ def main() -> int:
     markdown_path.write_text(markdown, encoding="UTF-8")
     print(f"Saved performance comparison markdown to {markdown_path}")
 
-    plot_path = render_plot(current_frame, previous_frame, args.version, output_dir)
+    plot_path = render_plot(current_frame, previous_frame, report, args.version, output_dir)
     print(f"Saved performance comparison plot to {plot_path}")
 
     n_warnings = int((report["verdict"] == "WARN").sum())

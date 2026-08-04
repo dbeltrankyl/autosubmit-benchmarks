@@ -13,8 +13,8 @@ name: metrics
 #     MAINTAINERS.md on the default branch) comments on a PR:
 #       - `/metrics`          quick suite
 #       - `/metrics_full`     full suite (includes run_heavy)
-#       - `/metrics_promote`  quick suite and force-promote the result as the
-#                             new baseline (overrides the regression guard)
+#       - `/metrics_promote`  promote the last completed run as the new
+#                             baseline.
 #
 # Baseline promotion is GUARDED: a run that regresses vs the current baseline
 # is never promoted, so the baseline cannot ratchet downward. Set up branch
@@ -39,7 +39,7 @@ permissions:
   actions: write
 
 # Only one benchmark workflow at a time: concurrent runs would race when
-# pushing the baseline branch (shared with the weekly metrics-cron workflow).
+# pushing the baseline branch.
 concurrency:
   group: benchmark
   cancel-in-progress: false
@@ -123,6 +123,7 @@ jobs:
       test_type: ${{ steps.scope.outputs.test_type }}
       should_run: ${{ steps.scope.outputs.should_run }}
       force_promote: ${{ steps.scope.outputs.force_promote }}
+      promote_last: ${{ steps.scope.outputs.promote_last }}
 
     steps:
       - name: Check for the perf-benchmark label
@@ -185,8 +186,19 @@ jobs:
           else
             echo "force_promote=false" >> "$GITHUB_OUTPUT"
           fi
-          # Run the benchmark for labeled PRs and for manual commands.
-          if [ "${{ github.event_name }}" == "issue_comment" ]; then
+          # Promote the last completed run without re-running: /metrics_promote.
+          if [ "${{ github.event_name }}" == "issue_comment" ] && \
+             [[ "${{ github.event.comment.body }}" == *"/metrics_promote"* ]]; then
+            echo "promote_last=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "promote_last=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Run the benchmark for labeled PRs and for manual commands, except
+          # /metrics_promote which only re-baselines the last run.
+          if [ "${{ github.event_name }}" == "issue_comment" ] && \
+             [[ "${{ github.event.comment.body }}" == *"/metrics_promote"* ]]; then
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" == "issue_comment" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           elif [ "${{ steps.label.outputs.label_present }}" == "true" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
@@ -391,8 +403,12 @@ jobs:
   update-baseline:
     needs: [report, metrics]
     if: >
-      always() && needs.report.result == 'success' && needs.metrics.result == 'success' &&
-      (needs.report.outputs.regressions_detected == 'false' || needs.report.outputs.force_promote == 'true')
+      always() && needs.metrics.result == 'success' &&
+      (
+        needs.metrics.outputs.promote_last == 'true' ||
+        (needs.report.result == 'success' &&
+         (needs.report.outputs.regressions_detected == 'false' || needs.report.outputs.force_promote == 'true'))
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -401,11 +417,49 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Find latest benchmark artifact
+        id: latest
+        if: needs.metrics.outputs.promote_last == 'true'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            let arts = [];
+            for (let page = 1; page <= 5; page++) {
+              const { data } = await github.rest.actions.listArtifactsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+                page,
+              });
+              arts.push(...(data.artifacts || []));
+              if (!(data.artifacts && data.artifacts.length === 100)) break;
+            }
+            const candidates = arts
+              .filter(a => a.name.startsWith('performance-metrics-') && a.expired === false)
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            if (!candidates.length) throw new Error('No benchmark artifact found to promote. Run /metrics first.');
+            const art = candidates[0];
+            core.setOutput('artifact_id', String(art.id));
+            core.setOutput('artifact_name', art.name);
+            core.setOutput('run_head_sha', (art.workflow_run && art.workflow_run.head_sha) || '');
+
       - name: Download benchmark artifacts
+        if: needs.metrics.outputs.promote_last != 'true'
         uses: actions/download-artifact@v4
         with:
           name: performance-metrics-${{ needs.metrics.outputs.version }}
           path: artifact
+
+      - name: Download latest benchmark artifact
+        if: needs.metrics.outputs.promote_last == 'true'
+        run: |
+          curl -sL \
+            -H "Authorization: Bearer ${{ github.token }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/${{ github.repository }}/actions/artifacts/${{ steps.latest.outputs.artifact_id }}/zip" \
+            -o artifact.zip
+          mkdir -p artifact
+          unzip -o artifact.zip -d artifact
 
       - name: Update the benchmark-reference branch
         run: |
@@ -423,8 +477,27 @@ jobs:
           mkdir -p .benchmarks/reference
           cp -r artifact/data/. .benchmarks/reference/
           git add .benchmarks/reference
-          git commit -m "Update benchmark baseline for ${{ needs.metrics.outputs.version }} (${{ needs.metrics.outputs.head_sha }})" || {
+          if [ "${{ needs.metrics.outputs.promote_last }}" == "true" ]; then
+            label="artifact ${{ steps.latest.outputs.artifact_name }} (${{ steps.latest.outputs.run_head_sha }})"
+          else
+            label="${{ needs.metrics.outputs.version }} (${{ needs.metrics.outputs.head_sha }})"
+          fi
+          git commit -m "Update benchmark baseline for ${label}" || {
             echo "No changes to commit"
             exit 0
           }
           git push "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" benchmark-reference
+
+      - name: Post promotion confirmation
+        if: needs.metrics.outputs.promote_last == 'true'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const name = '${{ steps.latest.outputs.artifact_name }}';
+            const sha = '${{ steps.latest.outputs.run_head_sha }}';
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number('${{ needs.metrics.outputs.issue_number }}'),
+              body: `Baseline promoted from the last completed benchmark run: \`${name}\`${sha ? ` (head ${sha})` : ''}.`
+            });

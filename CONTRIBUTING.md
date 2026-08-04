@@ -1,4 +1,3 @@
-dummy_pr
 ## Autosubmit contribution guide
 
 **Documentation:** http://autosubmit.readthedocs.io/en/latest/
@@ -186,19 +185,23 @@ never promoted).
   that may affect runtime performance (requires write/triage access; if you
   cannot add labels, say so in the PR description so a maintainer can). See
   the PR template and the "Set up the merge gate" note below.
-* **Manually**: a member of the `BSC-ES/autosubmit` team (or a user listed in
-  `MAINTAINERS.md`) comments on a PR:
+* **Manually**: a member of the `BSC-ES/autosubmit` team (or a user listed as
+  `@username` in this repository's `MAINTAINERS.md` on the default branch)
+  comments on a PR:
   * `/metrics` — quick suite
-  * `/metrics_full` — full suite 
-  * `/metrics_promote` — quick suite, then force-promote the result as the new
-    baseline (overrides the regression guard, e.g. after an intentional change)
-* **Weekly safety net** (`metrics-cron` workflow): every Monday, the full suite
-  runs on the latest `master`. If it has not regressed, the baseline is
-  refreshed; if it has, the regression is reported in the job summary and the
-  baseline is kept. This catches slow cumulative drift across many PRs.
+  * `/metrics_full` — full suite
+  * `/metrics_promote` — promote the last completed run as the new baseline. Run `/metrics` (or `/metrics_full`) first, then `/metrics_promote`
+    to re-baseline that result.
+
+> NOTE: the `/metrics*` commands execute the workflow from the **default
+> branch** (GitHub runs `issue_comment` workflows from the default branch), so
+> workflow changes only take effect for comments once they land on `master`.
 
 The PR results are posted as a comment comparing them against the baseline,
-flagging regressions beyond the configured thresholds as warnings.
+flagging regressions beyond the configured thresholds as warnings. The
+comparison plot is stored on the `benchmark-reference` branch and linked from
+the comment (GitHub strips `data:` image URIs, so the plot is not embedded
+inline); only the latest plot is kept.
 
 ### The baseline
 
