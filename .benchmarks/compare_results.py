@@ -60,13 +60,22 @@ METRIC_COLUMNS = [
 _GROW_METRICS = {"FD GROW", "MEM GROW(MIB)", "OBJ GROW"}
 _NO_GROW_TEST_TYPES = {"create", "recovery", "setstatus"}
 
-# Metrics shown in the heatmap (curated; the rest stay in the markdown table).
-_PLOT_METRICS = ["Time Taken(Seconds)", "Memory consumption(MiB)", "MEM GROW(MIB)", "OBJ GROW"]
+# The performance plots are split in two: the `run` scenarios carry the
+# profiler growth metrics, the create/recovery/setstatus scenarios only carry
+# time/memory/db.
+_RUN_TEST_TYPES = {"run", "run_heavy"}
+_OTHER_TEST_TYPES = {"create", "recovery", "setstatus"}
+_RUN_PLOT_METRICS = ["Time Taken(Seconds)", "Memory consumption(MiB)", "MEM GROW(MIB)", "FD GROW", "OBJ GROW"]
+_OTHER_PLOT_METRICS = ["Time Taken(Seconds)", "Memory consumption(MiB)",
+                       "Historical DB Disk Usage(MiB)", "Job list DB Usage"]
 _SHORT_METRICS = {
     "Time Taken(Seconds)": "Time (s)",
     "Memory consumption(MiB)": "Memory (MiB)",
     "MEM GROW(MIB)": "MEM grow (MiB)",
+    "FD GROW": "FD grow",
     "OBJ GROW": "Obj grow",
+    "Historical DB Disk Usage(MiB)": "Hist DB (KiB)",
+    "Job list DB Usage": "Job DB (KiB)",
 }
 
 
@@ -89,7 +98,8 @@ def _load_thresholds(path: Path) -> dict:
         data = yaml.load(file) or {}
     metrics = data.get("metrics", {})
     exact = data.get("exact_metrics", [])
-    return {"metrics": metrics, "exact_metrics": exact}
+    plot_cfg = data.get("plot", {})
+    return {"metrics": metrics, "exact_metrics": exact, "plot": plot_cfg}
 
 
 def _iter_run_files(path: str | None, latest_only: bool = False) -> list[Path]:
@@ -344,46 +354,93 @@ def _metric_threshold(thresholds: dict, metric: str) -> float:
     return thr if thr > 0 else 15.0
 
 
+def _text_color(rgba: np.ndarray, r: int, c: int) -> str:
+    """Return 'white' or 'black' for text on a cell, based on its rendered luminance.
+
+    The cell color is composited over white at its alpha, then the luminance
+    decides the text color so dark cells get white text and light cells black.
+    """
+    rgb = rgba[r, c, 0:3]
+    alpha = float(rgba[r, c, 3])
+    eff = alpha * rgb + (1.0 - alpha)
+    lum = 0.299 * float(eff[0]) + 0.587 * float(eff[1]) + 0.114 * float(eff[2])
+    return "white" if lum < 0.55 else "black"
+
+
 def _format_abs(metric: str, value: float) -> str:
-    """Format an absolute metric value for a heatmap cell without a baseline."""
+    """Format an absolute metric value for a heatmap cell (numbers only)."""
     if metric == "Time Taken(Seconds)":
-        return f"{value:.1f}s"
-    if metric == "Memory consumption(MiB)":
-        return f"{value:.0f} MiB"
+        return f"{value:.1f}"
+    if metric in ("Historical DB Disk Usage(MiB)", "Job list DB Usage"):
+        return f"{value * 1024:.0f}"
     return f"{value:.0f}"
 
 
 def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report: pd.DataFrame,
                    version: str, output_dir: Path, cpu_label: str | None = None,
-                   thresholds: dict | None = None) -> Path:
-    """Render a delta heatmap of every scenario x metric, current vs baseline.
+                   thresholds: dict | None = None, test_types: set[str] | None = None,
+                   metrics: list[str] | None = None,
+                   out_name: str | None = None) -> Path | None:
+    """Render a filled-cell grid for a subset of scenarios x metrics.
 
-    Hue shows the direction of change (red = regression, green = improvement)
-    and the cell opacity encodes the threshold-relative severity (``|delta| /
-    threshold``), so cells that exceed their regression guard stand out. Cells
-    without a baseline show the current absolute value; metrics excluded from a
-    test type are left blank.
+    Each scenario x metric intersection is a cell: its color encodes the
+    direction (``coolwarm`` diverging, red = regression, blue = improvement)
+    with a central dead zone (|delta| below ``plot.delta_tolerance`` renders
+    neutral) and opacity by threshold-relative severity. Cells are annotated
+    with the current absolute value (numbers only, units in the column headers);
+    rows are grouped by test type via a left gutter. When there is no baseline,
+    cells are uniformly neutral. Metrics excluded from a test type are left
+    blank. ``test_types`` and ``metrics`` restrict which scenarios and metrics
+    are drawn, so the run-only profiler metrics can live in their own plot.
     """
     import matplotlib
 
     matplotlib.use("Agg")
     import numpy as np
     import matplotlib.pyplot as plt
-    from matplotlib.colors import TwoSlopeNorm
+    from matplotlib.colors import TwoSlopeNorm, Normalize
+    from matplotlib.patches import Rectangle
+
+    class _DeadZoneNorm(Normalize):
+        """Diverging norm with a central neutral 'dead zone'."""
+
+        def __init__(self, vmin: float, vmax: float, vcenter: float = 0.0, tolerance: float = 3.0):
+            super().__init__(vmin=vmin, vmax=vmax)
+            self.vcenter = float(vcenter)
+            self.tolerance = float(tolerance)
+
+        def _span(self) -> float:
+            return max(self.vmax - self.vcenter, self.vcenter - self.vmin)
+
+        def __call__(self, value, clip=None):
+            v = np.clip(np.asarray(value, dtype=float), self.vmin, self.vmax)
+            half = max((self._span() - self.tolerance) / 2.0, 1e-9)
+            x = np.zeros_like(v)
+            above = v >= self.vcenter + self.tolerance
+            below = v <= self.vcenter - self.tolerance
+            x[above] = (v[above] - (self.vcenter + self.tolerance)) / (2.0 * half)
+            x[below] = (v[below] - (self.vcenter - self.tolerance)) / (2.0 * half)
+            return np.clip((x + 1.0) / 2.0, 0.0, 1.0)
+
+        def inverse(self, value):
+            x = np.asarray(value, dtype=float) * 2.0 - 1.0
+            half = max((self._span() - self.tolerance) / 2.0, 1e-9)
+            return np.where(x >= 0,
+                            self.vcenter + self.tolerance + x * 2.0 * half,
+                            self.vcenter - self.tolerance + x * 2.0 * half)
 
     thresholds = thresholds or {}
-    metrics = [c for c in _PLOT_METRICS if current[c].notna().any()]
-    if not metrics:
-        out = output_dir / f"summary_{version}.png"
-        out.parent.mkdir(parents=True, exist_ok=True)
-        return out
-
+    test_types = test_types or set(current.index.get_level_values("test type").unique())
+    metrics = [c for c in (metrics or []) if current[c].notna().any()]
     order = []
-    labels = []
     for test_type in current.index.get_level_values("test type").unique():
+        if test_type not in test_types:
+            continue
         for run_id in current.xs(test_type, level="test type").index:
             order.append((test_type, run_id))
-            labels.append(f"{test_type} · {_abbreviate_id(run_id)}")
+
+    if not metrics or not order:
+        return None
 
     pivot = report.pivot_table(index=["test type", "ID"], columns="metric",
                                values="delta %", aggfunc="first")
@@ -400,69 +457,127 @@ def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report:
         for c, metric in enumerate(metrics):
             excluded[r, c] = metric not in _allowed_metrics(test_type)
 
-    clip = 50.0
-    norm = TwoSlopeNorm(vmin=-clip, vcenter=0, vmax=clip)
-    cmap = plt.get_cmap("RdYlGn_r")
-    base = np.where(np.isnan(delta), 0.0, delta)
-    rgba = cmap(norm(base))
+    absolute_mode = previous is None or previous.empty
+    plot_cfg = thresholds.get("plot", {})
+    clip = float(plot_cfg.get("delta_clip", 15.0))
+    tolerance = float(plot_cfg.get("delta_tolerance", 3.0))
+    cmap = plt.get_cmap("coolwarm")
+    if absolute_mode:
+        # No baseline: uniform neutral cells (the "0%" color), values only.
+        color_values = np.zeros_like(absval)
+        norm = TwoSlopeNorm(vmin=-1.0, vcenter=0.0, vmax=1.0)
+    else:
+        norm = _DeadZoneNorm(vmin=-clip, vmax=clip, vcenter=0.0, tolerance=tolerance)
+        color_values = np.where(np.isnan(delta), 0.0, delta)
 
-    no_baseline = np.isnan(delta) & ~excluded
+    rgba = cmap(norm(color_values))
     rgba[excluded, 3] = 0.0
-    rgba[no_baseline, 0:3] = [0.89, 0.89, 0.89]
-    rgba[no_baseline, 3] = 1.0
-    for r in range(len(order)):
-        for c in range(len(metrics)):
-            if np.isnan(delta[r, c]) or excluded[r, c]:
-                continue
-            severity = abs(delta[r, c]) / _metric_threshold(thresholds, metrics[c])
-            rgba[r, c, 3] = 0.25 + 0.75 * min(1.0, severity)
+    if not absolute_mode:
+        no_baseline = np.isnan(delta) & ~excluded
+        dead_zone = (np.abs(delta) <= tolerance) & ~excluded
+        neutral = (no_baseline | dead_zone) & ~excluded
+        rgba[neutral, 0:3] = [0.88, 0.88, 0.88]
+        rgba[neutral, 3] = 1.0
+        significant = ~excluded & ~np.isnan(delta) & ~dead_zone
+        if significant.any():
+            sig_rows, sig_cols = np.nonzero(significant)
+            thresholds_by_col = np.array([_metric_threshold(thresholds, m) for m in metrics], dtype=float)
+            severity = np.abs(delta[sig_rows, sig_cols]) / thresholds_by_col[sig_cols]
+            rgba[sig_rows, sig_cols, 3] = 0.25 + 0.75 * np.minimum(1.0, severity)
+    else:
+        rgba[np.isnan(absval) & ~excluded, 3] = 0.0
 
-    fig, ax = plt.subplots(figsize=(7.5, max(3.5, 0.42 * len(order) + 1.5)))
-    ax.imshow(rgba, aspect="auto")
+    fig, ax = plt.subplots(figsize=(1.7 * len(metrics) + 2.4, max(3.5, 0.5 * len(order) + 1.5)))
+    ax.set_frame_on(False)
+    ax.imshow(rgba, aspect="auto", interpolation="nearest")
+
+    ax.set_xticks([c + 0.5 for c in range(len(metrics))], minor=True)
+    ax.set_yticks([r + 0.5 for r in range(len(order))], minor=True)
+    ax.grid(which="minor", color="#eeeeee", lw=0.8)
+    ax.set_xlim(-1.9, len(metrics) - 0.5)
+    ax.set_ylim(len(order) - 0.5, -0.5)
 
     for r in range(len(order)):
         for c, metric in enumerate(metrics):
             if excluded[r, c]:
                 continue
-            value = delta[r, c]
-            if not np.isnan(value):
-                ax.text(c, r, f"{value:+.1f}%", ha="center", va="center", fontsize=8,
-                        color="white" if abs(value) > clip * 0.6 else "black")
-            else:
-                abs_value = absval[r, c]
-                if not np.isnan(abs_value):
-                    ax.text(c, r, _format_abs(metric, abs_value), ha="center", va="center",
-                            fontsize=7, color="#555555")
+            abs_value = absval[r, c]
+            if np.isnan(abs_value):
+                continue
+            ax.text(c, r, _format_abs(metric, abs_value), ha="center", va="center",
+                    fontsize=8, color=_text_color(rgba, r, c))
 
     ax.set_yticks(range(len(order)))
-    ax.set_yticklabels(labels, fontsize=7)
+    ax.set_yticklabels([_abbreviate_id(run_id) for (_, run_id) in order], fontsize=7)
     ax.set_xticks(range(len(metrics)))
     ax.set_xticklabels([_SHORT_METRICS.get(m, m) for m in metrics], fontsize=9)
 
     prev_type = None
     for r, (test_type, _) in enumerate(order):
         if prev_type is not None and test_type != prev_type:
-            ax.axhline(r - 0.5, color="gray", lw=0.9)
+            ax.axhline(r - 0.5, color="gray", lw=0.9, zorder=1)
         prev_type = test_type
+
+    groups: dict[str, list[int]] = {}
+    for r, (test_type, _) in enumerate(order):
+        groups.setdefault(test_type, []).append(r)
+
+    for test_type, rows in groups.items():
+        ymid = (rows[0] + rows[-1]) / 2.0
+        group_rows = rows[-1] - rows[0] + 1
+        fontsize = min(12, max(7, 8 * group_rows))
+        ax.text(-1.15, ymid, test_type, rotation=90, ha="center", va="center",
+                fontsize=fontsize, fontweight="bold", color="#1f1f1f")
+        ax.add_patch(Rectangle((-0.5, rows[0] - 0.5), len(metrics), group_rows,
+                               fill=False, edgecolor="black", linewidth=1.5, zorder=2))
 
     title = f"Autosubmit Performance Metrics - Version {version}"
     if cpu_label:
         title += f" · {cpu_label}"
-    if previous is None or previous.empty:
+    if absolute_mode:
         title += " · no baseline - absolute values"
     ax.set_title(title, fontsize=13)
 
     sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
     sm.set_array([])
-    cb = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02)
-    cb.set_label("delta % vs baseline (opacity = |delta| / threshold)")
+    if not absolute_mode:
+        cb = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02)
+        cb.set_label("Delta % vs Baseline")
+        ticks = [-clip, -clip / 2, 0, clip / 2, clip]
+        cb.set_ticks(ticks)
+        cb.set_ticklabels([f"{v:g}" for v in ticks])
 
-    fig.tight_layout()
-    out = output_dir / f"summary_{version}.png"
+    if absolute_mode:
+        caption = "Cells = current values. Units: Time (s), Memory (MiB), DB sizes (KiB)."
+    else:
+        caption = (f"Cells = current values. Color = Δ% vs baseline "
+                   f"(|Δ| < {tolerance:g}% neutral gray). "
+                   "Units: Time (s), Memory (MiB), DB sizes (KiB).")
+    fig.text(0.5, 0.012, caption, ha="center", fontsize=8, color="#555555")
+
+    fig.tight_layout(rect=[0, 0.04, 1, 1])
+    out = output_dir / (out_name or f"summary_{version}.png")
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=110, bbox_inches="tight")
     plt.close(fig)
     return out
+
+
+def render_heatmaps(current: pd.DataFrame, previous: pd.DataFrame | None, report: pd.DataFrame,
+                    version: str, output_dir: Path, cpu_label: str | None = None,
+                    thresholds: dict | None = None) -> list[Path]:
+    """Render the two performance plots: `run` and the create/recovery/setstatus ones."""
+    paths = []
+    for name, test_types, metrics in (
+        (f"summary_{version}_run.png", _RUN_TEST_TYPES, _RUN_PLOT_METRICS),
+        (f"summary_{version}_create_recovery_setstatus.png", _OTHER_TEST_TYPES, _OTHER_PLOT_METRICS),
+    ):
+        out = render_heatmap(current, previous, report, version, output_dir,
+                             cpu_label=cpu_label, thresholds=thresholds,
+                             test_types=test_types, metrics=metrics, out_name=name)
+        if out is not None:
+            paths.append(out)
+    return paths
 
 
 def main() -> int:
@@ -527,9 +642,10 @@ def main() -> int:
     markdown_path.write_text(markdown, encoding="UTF-8")
     print(f"Saved performance comparison markdown to {markdown_path}")
 
-    plot_path = render_heatmap(current_frame, previous_frame, report, args.version, output_dir,
-                               cpu_label=current_cpu or None, thresholds=thresholds)
-    print(f"Saved performance comparison plot to {plot_path}")
+    plot_paths = render_heatmaps(current_frame, previous_frame, report, args.version, output_dir,
+                                 cpu_label=current_cpu or None, thresholds=thresholds)
+    for plot_path in plot_paths:
+        print(f"Saved performance comparison plot to {plot_path}")
 
     n_warnings = int((report["verdict"] == "WARN").sum())
     verdict = {

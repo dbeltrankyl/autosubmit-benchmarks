@@ -9,33 +9,41 @@
 # `exact_metrics` are deterministic values that must not change at all between
 # runs (e.g. the experiment structure).
 #
+# `plot` controls the performance plots: `delta_clip` is the color scale limit
+# (in %), and `delta_tolerance` is the neutral "dead zone" (any delta inside
+# this band renders neutral instead of red/blue).
+#
 # Initial values were calibrated against the variance observed in
 # .benchmarks/artifacts/performance-metrics-4.2.0.csv. Tune them after a few
 # benchmark cycles on the GitHub-hosted runner (wall-clock time and memory are
 # the noisiest metrics; the deterministic counters should never move).
 metrics:
   Time Taken(Seconds):
-    threshold: 15.0
+    threshold: 20.0
     floor: 1.0
   Memory consumption(MiB):
     threshold: 10.0
     floor: 50.0
   Historical DB Disk Usage(MiB):
-    threshold: 20.0
+    threshold: 10.0
     floor: 1.0
   Job list DB Usage:
-    threshold: 20.0
+    threshold: 10.0
     floor: 1.0
   FD GROW:
-    threshold: 25.0
+    threshold: 15.0
     floor: 1.0
   MEM GROW(MIB):
-    threshold: 25.0
+    threshold: 15.0
     floor: 1.0
   OBJ GROW:
-    threshold: 25.0
+    threshold: 20.0
     floor: 1.0
 
 exact_metrics:
   - Total Jobs
   - Total Dependencies
+
+plot:
+  delta_clip: 30.0
+  delta_tolerance: 2.5

@@ -343,13 +343,11 @@ jobs:
             const repo = context.repo.repo;
             const branch = 'benchmark-reference';
             const dir = '.benchmarks/artifacts';
-            const pngName = `summary_${version}.png`;
-            const pngPath = `${dir}/${pngName}`;
+            const plotNames = [`summary_${version}_run.png`, `summary_${version}_create_recovery_setstatus.png`];
 
             const summary = fs.readFileSync(`${dir}/summary_${version}.md`, 'utf8');
-            const pngB64 = fs.readFileSync(pngPath, { encoding: 'base64' });
 
-            // GitHub strips data: URIs from comment images, so the plot is
+            // GitHub strips data: URIs from comment images, so the plots are
             // pushed to the benchmark-reference branch and linked over https.
             try {
               await github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
@@ -364,7 +362,7 @@ jobs:
             try {
               const { data } = await github.rest.repos.getContent({ owner, repo, path: dir, ref: branch });
               old = Array.isArray(data)
-                ? data.filter(f => f.name.startsWith('summary_') && f.name.endsWith('.png') && f.name !== pngName)
+                ? data.filter(f => f.name.startsWith('summary_') && f.name.endsWith('.png') && !plotNames.includes(f.name))
                 : [];
             } catch (e) { if (e.status !== 404) throw e; }
             for (const f of old) {
@@ -372,14 +370,18 @@ jobs:
                 message: `Remove outdated plot ${f.name}`, branch, sha: f.sha });
             }
 
-            let existingSha;
-            try {
-              const { data } = await github.rest.repos.getContent({ owner, repo, path: pngPath, ref: branch });
-              existingSha = data.sha;
-            } catch (e) { if (e.status !== 404) throw e; }
-            await github.rest.repos.createOrUpdateFileContents({ owner, repo, path: pngPath,
-              message: `Upload benchmark plot for ${version}`, content: pngB64, branch,
-              ...(existingSha ? { sha: existingSha } : {}) });
+            for (const pngName of plotNames) {
+              const pngPath = `${dir}/${pngName}`;
+              const pngB64 = fs.readFileSync(pngPath, { encoding: 'base64' });
+              let existingSha;
+              try {
+                const { data } = await github.rest.repos.getContent({ owner, repo, path: pngPath, ref: branch });
+                existingSha = data.sha;
+              } catch (e) { if (e.status !== 404) throw e; }
+              await github.rest.repos.createOrUpdateFileContents({ owner, repo, path: pngPath,
+                message: `Upload benchmark plot for ${version}`, content: pngB64, branch,
+                ...(existingSha ? { sha: existingSha } : {}) });
+            }
 
             await github.rest.issues.createComment({
               owner, repo,
@@ -387,7 +389,9 @@ jobs:
               body: [
                 `## Benchmark Results (${{ needs.metrics.outputs.test_type }})`,
                 '',
-                `![Plot Results](https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${pngPath})`,
+                `![Run scenarios](https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${dir}/${plotNames[0]})`,
+                '',
+                `![Create / Recovery / Setstatus](https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${dir}/${plotNames[1]})`,
                 '',
                 summary,
                 '',
@@ -402,7 +406,8 @@ jobs:
           echo "================================"
           cat .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}.md
           echo ""
-          echo "Plot saved to .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}.png"
+          echo "Plots saved to .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}_run.png"
+          echo "             and .benchmarks/artifacts/summary_${{ needs.metrics.outputs.version }}_create_recovery_setstatus.png"
 
   update-baseline:
     needs: [report, metrics]

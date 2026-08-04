@@ -198,10 +198,12 @@ never promoted).
 > workflow changes only take effect for comments once they land on `master`.
 
 The PR results are posted as a comment comparing them against the baseline,
-flagging regressions beyond the configured thresholds as warnings. The
-comparison plot is stored on the `benchmark-reference` branch and linked from
-the comment (GitHub strips `data:` image URIs, so the plot is not embedded
-inline); only the latest plot is kept.
+flagging regressions beyond the configured thresholds as warnings. Two
+comparison plots are stored on the `benchmark-reference` branch and linked from
+the comment (GitHub strips `data:` image URIs, so plots are not embedded
+inline): one for the `run`/`run_heavy` scenarios (which carry the profiler
+growth metrics) and one for `create`/`recovery`/`setstatus`. Only the latest
+plots are kept.
 
 ### The baseline
 
@@ -262,8 +264,12 @@ $ python .benchmarks/compare_results.py \
 ```
 
 The report is written to `.benchmarks/artifacts/summary_<version>.md` and the
-plot (a delta heatmap of every scenario x metric, red = regression) to
-`summary_<version>.png`.
+two grid plots (one per scenario group, `run` and `create/recovery/setstatus`) to
+`summary_<version>_run.png` and `summary_<version>_create_recovery_setstatus.png`. Cells are colored
+red/blue by change direction (with a neutral dead zone for |delta| below
+`plot.delta_tolerance`, configurable in `.benchmarks/thresholds.yml`) and
+annotated with the current value; rows are grouped by test type. Without a
+baseline, cells are neutral and only show the values.
 
 ## Test GitHub Actions locally
 
