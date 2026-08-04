@@ -206,8 +206,19 @@ inline); only the latest plot is kept.
 ### The baseline
 
 The baseline lives on the `benchmark-reference` branch (`.benchmarks/reference`),
-and every promotion is a commit, so its history is preserved. To restore a
-previous baseline after a bad merge:
+and every promotion is a commit, so its history is preserved.
+
+Baselines are stored **per CPU model**:
+`.benchmarks/reference/<cpu-slug>/` where the slug derives from the runner's
+CPU (`machine_info.cpu.brand_raw`, e.g. `intel-r-xeon-r-platinum-8370c-cpu-2-80ghz`).
+GitHub-hosted runners do not guarantee a fixed CPU (the fleet mixes Intel and
+AMD parts), so a run is only compared against the baseline of the same CPU;
+results across different CPUs are not comparable. Baselines fill lazily: the
+first run on a given CPU establishes that CPU's baseline (reported as "no
+baseline yet"), and later runs on the same CPU are compared against it. There is
+no way to pre-seed a CPU you have never run on.
+
+To restore a previous baseline after a bad merge:
 
 ```bash
 git fetch origin benchmark-reference
@@ -251,7 +262,8 @@ $ python .benchmarks/compare_results.py \
 ```
 
 The report is written to `.benchmarks/artifacts/summary_<version>.md` and the
-plot to `summary_<version>.png`.
+plot (a delta heatmap of every scenario x metric, red = regression) to
+`summary_<version>.png`.
 
 ## Test GitHub Actions locally
 

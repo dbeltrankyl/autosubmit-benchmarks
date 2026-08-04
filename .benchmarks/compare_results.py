@@ -6,13 +6,16 @@ produces:
 
 - ``summary_{version}.md``: a comparison table between the current run and a
   baseline, flagging regressions that exceed the configured thresholds.
-- ``summary_{version}.png``: bar plots of wall-clock time and memory per
-  scenario, current vs baseline.
+- ``summary_{version}.png``: a delta heatmap of every scenario x metric,
+  current vs baseline (regressions in red).
 
 Baselines are aggregated with the median across all provided run files, so the
 ``--previous`` argument can point to a directory holding several historical
 runs (e.g. the last N master runs committed to the ``benchmark-reference``
-branch).
+branch). Baselines may be stored per CPU: ``.benchmarks/reference/<cpu-slug>/``,
+in which case the baseline matching the current run's CPU is selected
+automatically (a run on a CPU without a baseline yet is shown without
+comparison and seeds it).
 
 Usage::
 
@@ -31,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -52,8 +56,18 @@ METRIC_COLUMNS = [
 ] + EXACT_METRICS
 
 # Profiler growth metrics are only meaningful for the `run` scenarios;
+# elsewhere they are absent or dominated by noise, so they are excluded.
 _GROW_METRICS = {"FD GROW", "MEM GROW(MIB)", "OBJ GROW"}
 _NO_GROW_TEST_TYPES = {"create", "recovery", "setstatus"}
+
+# Metrics shown in the heatmap (curated; the rest stay in the markdown table).
+_PLOT_METRICS = ["Time Taken(Seconds)", "Memory consumption(MiB)", "MEM GROW(MIB)", "OBJ GROW"]
+_SHORT_METRICS = {
+    "Time Taken(Seconds)": "Time (s)",
+    "Memory consumption(MiB)": "Memory (MiB)",
+    "MEM GROW(MIB)": "MEM grow (MiB)",
+    "OBJ GROW": "Obj grow",
+}
 
 
 def _allowed_metrics(test_type: str) -> set[str]:
@@ -108,6 +122,49 @@ def _load_runs(files: list[Path]) -> list[dict]:
         except (OSError, json.JSONDecodeError) as exc:
             print(f"[WARNING] Skipping unreadable benchmark file {file}: {exc}")
     return runs
+
+
+def _current_cpu(runs: list[dict]) -> str:
+    """Return the CPU ``brand_raw`` of the first run, or ``''`` when unknown."""
+    if not runs:
+        return ""
+    return (runs[0].get("machine_info", {}).get("cpu") or {}).get("brand_raw") or ""
+
+
+def _cpu_slug(brand_raw: str) -> str:
+    """Turn a CPU brand string into a directory-safe slug."""
+    slug = re.sub(r"[^a-z0-9]+", "-", brand_raw.lower()).strip("-")
+    return slug or "unknown-cpu"
+
+
+def _is_machine_dir(name: str) -> bool:
+    """pytest-benchmark stores runs under machine dirs like ``Linux-CPython-3.11-64bit``."""
+    return bool(re.match(r"^(linux|darwin|windows)-", name, re.IGNORECASE))
+
+
+def _select_previous(previous: str | None, current_cpu: str) -> tuple[list[Path], str | None]:
+    """Return the baseline run files for the current CPU plus its slug.
+
+    ``--previous`` may be a single file, a flat directory of JSON runs (legacy),
+    or a directory of per-CPU subdirectories (``.benchmarks/reference/<slug>/``).
+    When per-CPU subdirectories exist, the one matching ``current_cpu`` is used;
+    if none matches, no baseline is available for this CPU.
+    """
+    if not previous:
+        return [], None
+    p = Path(previous)
+    if p.is_file():
+        return [p], None
+    if p.is_dir():
+        subdirs = [d for d in p.iterdir() if d.is_dir()]
+        if any(not _is_machine_dir(d.name) for d in subdirs):
+            slug = _cpu_slug(current_cpu) if current_cpu else ""
+            target = p / slug if slug else None
+            if target is not None and target.is_dir():
+                return sorted(target.rglob("*.json")), slug
+            return [], slug
+        return sorted(p.rglob("*.json")), None
+    return [], None
 
 
 def build_frame(runs: list[dict]) -> pd.DataFrame:
@@ -280,104 +337,73 @@ def _abbreviate_id(run_id: str) -> str:
     return run_id
 
 
-def render_plot(current: pd.DataFrame, previous: pd.DataFrame | None, report: pd.DataFrame,
-                version: str, output_dir: Path) -> Path:
-    """Render a facet-grid comparison of the measured metrics, current vs baseline.
+def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report: pd.DataFrame,
+                   version: str, output_dir: Path, cpu_label: str | None = None) -> Path:
+    """Render a delta heatmap of every scenario x metric, current vs baseline.
 
-    One row per test type, one panel per metric that is meaningful for it
-    (profiler growth metrics are only shown for ``run``/``run_heavy``).
-    Regressions flagged in ``report`` are highlighted in red.
+    Cells show the percentage change against the (CPU-matched) baseline using a
+    diverging scale centered at zero (red = regression). Cells without a
+    baseline, or for metrics excluded from a test type, are left gray.
     """
     import matplotlib
 
     matplotlib.use("Agg")
+    import numpy as np
     import matplotlib.pyplot as plt
+    from matplotlib.colors import TwoSlopeNorm
 
-    test_types = list(current.index.get_level_values("test type").unique())
-    warn = set()
-    if not report.empty:
-        for _, row in report.iterrows():
-            if row["verdict"] == "WARN":
-                warn.add((row["test type"], row["ID"], row["metric"]))
+    metrics = [c for c in _PLOT_METRICS if current[c].notna().any()]
+    if not metrics:
+        out = output_dir / f"summary_{version}.png"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        return out
 
-    n_plot_metrics = [len([c for c in METRIC_COLUMNS
-                           if c not in EXACT_METRICS and c in _allowed_metrics(test_type)
-                           and current[c].notna().any()]) for test_type in test_types]
-    fig = plt.figure(figsize=(16, 2.6 * len(test_types) + 0.4))
-    gs = fig.add_gridspec(len(test_types), 1, hspace=0.55, top=0.88, bottom=0.07,
-                          left=0.07, right=0.99)
-    fig.suptitle(f"Autosubmit Performance Metrics - Version {version}", fontsize=15)
+    order = []
+    labels = []
+    for test_type in current.index.get_level_values("test type").unique():
+        for run_id in current.xs(test_type, level="test type").index:
+            order.append((test_type, run_id))
+            labels.append(f"{test_type} · {_abbreviate_id(run_id)}")
 
-    for i, test_type in enumerate(test_types):
-        cur = current.xs(test_type, level="test type")
-        prev = previous.xs(test_type, level="test type") if previous is not None else pd.DataFrame()
-        ids = list(cur.index)
-        x = list(range(len(ids)))
-        width = 0.38
+    pivot = report.pivot_table(index=["test type", "ID"], columns="metric",
+                               values="delta %", aggfunc="first")
+    matrix = pivot.reindex(index=order, columns=metrics).to_numpy(dtype=float)
 
-        metrics = [c for c in METRIC_COLUMNS
-                   if c not in EXACT_METRICS and c in _allowed_metrics(test_type)
-                   and current[c].notna().any()]
-        if not metrics:
-            ax = fig.add_subplot(gs[i])
-            ax.axis("off")
-            continue
+    clip = 50.0
+    norm = TwoSlopeNorm(vmin=-clip, vcenter=0, vmax=clip)
+    fig, ax = plt.subplots(figsize=(7.5, max(3.5, 0.42 * len(order) + 1.5)))
+    im = ax.imshow(np.ma.masked_invalid(matrix), cmap="RdYlGn_r", norm=norm, aspect="auto")
 
-        sub = gs[i].subgridspec(1, len(metrics), wspace=0.3)
-        for j, col in enumerate(metrics):
-            ax = fig.add_subplot(sub[0, j])
-            cur_vals = pd.to_numeric(cur[col], errors="coerce")
-            if prev is not None and not prev.empty and col in prev.columns:
-                prev_aligned = pd.to_numeric(prev[col].reindex(ids), errors="coerce")
-            else:
-                prev_aligned = pd.Series(pd.NA, index=ids)
+    for r in range(len(order)):
+        for c in range(len(metrics)):
+            value = matrix[r, c]
+            if np.isnan(value):
+                continue
+            ax.text(c, r, f"{value:+.1f}%", ha="center", va="center", fontsize=8,
+                    color="white" if abs(value) > clip * 0.6 else "black")
 
-            colors = ["#d62728" if (test_type, run_id, col) in warn else "#1f77b4" for run_id in ids]
-            ax.bar([p - width / 2 for p in x], cur_vals.fillna(0), width,
-                   color=colors, alpha=0.85, label="Current")
-            ax.bar([p + width / 2 for p in x], prev_aligned.fillna(0), width,
-                   color="#ff7f0e", alpha=0.45, label="Baseline")
+    ax.set_yticks(range(len(order)))
+    ax.set_yticklabels(labels, fontsize=7)
+    ax.set_xticks(range(len(metrics)))
+    ax.set_xticklabels([_SHORT_METRICS.get(m, m) for m in metrics], fontsize=9)
 
-            # Value annotations only when the panel is not crowded.
-            if len(ids) <= 6:
-                for p, v in zip(x, cur_vals):
-                    if pd.notna(v):
-                        ax.annotate(f"{v:.1f}", (p - width / 2, v), textcoords="offset points",
-                                    xytext=(0, 3), ha="center", fontsize=7)
-                for p, v in zip(x, prev_aligned):
-                    if pd.notna(v):
-                        ax.annotate(f"{v:.1f}", (p + width / 2, v), textcoords="offset points",
-                                    xytext=(0, 3), ha="center", fontsize=6, color="#a05d0e")
+    prev_type = None
+    for r, (test_type, _) in enumerate(order):
+        if prev_type is not None and test_type != prev_type:
+            ax.axhline(r - 0.5, color="gray", lw=0.9)
+        prev_type = test_type
 
-            for (tt, run_id, met) in warn:
-                if tt == test_type and met == col and run_id in ids:
-                    k = ids.index(run_id)
-                    delta = _safe_pct(cur_vals.iloc[k], prev_aligned.iloc[k])
-                    if delta is not None:
-                        ax.annotate(f"▲ {delta:+.1f}%", (x[k] - width / 2, cur_vals.iloc[k]),
-                                    textcoords="offset points", xytext=(0, 8), ha="center",
-                                    fontsize=8, color="#d62728", fontweight="bold")
+    title = f"Autosubmit Performance Metrics - Version {version}"
+    if cpu_label:
+        title += f" · {cpu_label}"
+    ax.set_title(title, fontsize=13)
+    cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
+    cb.set_label("delta % vs baseline")
 
-            ax.set_title(f"{test_type} · {col}", fontsize=9)
-            ax.set_xticks(x)
-            ax.set_xticklabels([_abbreviate_id(run_id) for run_id in ids],
-                               rotation=45, ha="right", fontsize=7)
-
-            vals = cur_vals.dropna()
-            if len(vals) > 1 and (vals > 0).all() and vals.max() / vals.min() > 50:
-                ax.set_yscale("log")
-
-    handles = [plt.Rectangle((0, 0), 1, 1, color="#1f77b4", alpha=0.85, label="Current")]
-    if previous is not None and not previous.empty:
-        handles.append(plt.Rectangle((0, 0), 1, 1, color="#ff7f0e", alpha=0.45, label="Baseline"))
-    if warn:
-        handles.append(plt.Rectangle((0, 0), 1, 1, color="#d62728", alpha=0.85, label="Regression"))
-    fig.legend(handles=handles, loc="upper center", ncol=len(handles),
-               frameon=False, bbox_to_anchor=(0.5, 0.965))
-
+    fig.tight_layout()
     out = output_dir / f"summary_{version}.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out, bbox_inches="tight")
+    fig.savefig(out, dpi=110, bbox_inches="tight")
     plt.close(fig)
     return out
 
@@ -404,13 +430,21 @@ def main() -> int:
             args.version = (Path(__file__).parent.parent / "VERSION").read_text().strip()
 
     current_files = _iter_run_files(args.current, latest_only=True)
-    previous_files = _iter_run_files(args.previous)
     if not current_files:
         print(f"[ERROR] No benchmark runs found under --current {args.current}", file=sys.stderr)
         return 1
 
     current_runs = _load_runs(current_files)
+    current_cpu = _current_cpu(current_runs)
+
+    previous_files, baseline_slug = _select_previous(args.previous, current_cpu)
     previous_runs = _load_runs(previous_files) if previous_files else []
+    if previous_runs and current_cpu:
+        baseline_cpu = _current_cpu(previous_runs)
+        if baseline_cpu and baseline_cpu != current_cpu:
+            print(f"[WARNING] Baseline CPU `{baseline_cpu}` differs from current `{current_cpu}`; "
+                  f"ignoring baseline.")
+            previous_runs = []
 
     current_frame = build_frame(current_runs)
     previous_frame = build_frame(previous_runs) if previous_runs else None
@@ -421,14 +455,23 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    prev_label = args.previous_label if previous_runs else None
+    baseline_cpu = _current_cpu(previous_runs) if previous_runs else ""
+    if prev_label and baseline_cpu:
+        prev_label = f"{prev_label} · {baseline_cpu}"
+
     env_warning = environment_warning(current_runs, previous_runs)
-    markdown = render_markdown(report, args.version, args.current_label,
-                               args.previous_label if previous_runs else None, env_warning)
+    if args.previous and not previous_runs and current_cpu:
+        note = f"No baseline yet for CPU `{current_cpu}` - this run establishes it (shown without comparison)."
+        env_warning = f"{env_warning}\n\n{note}" if env_warning else note
+
+    markdown = render_markdown(report, args.version, args.current_label, prev_label, env_warning)
     markdown_path = output_dir / f"summary_{args.version}.md"
     markdown_path.write_text(markdown, encoding="UTF-8")
     print(f"Saved performance comparison markdown to {markdown_path}")
 
-    plot_path = render_plot(current_frame, previous_frame, report, args.version, output_dir)
+    plot_path = render_heatmap(current_frame, previous_frame, report, args.version, output_dir,
+                               cpu_label=current_cpu or None)
     print(f"Saved performance comparison plot to {plot_path}")
 
     n_warnings = int((report["verdict"] == "WARN").sum())
@@ -437,6 +480,8 @@ def main() -> int:
         "regressions_detected": n_warnings > 0,
         "n_regressions": n_warnings,
         "n_scenarios": int(len(current_frame)),
+        "cpu": current_cpu,
+        "cpu_slug": _cpu_slug(current_cpu) if current_cpu else "",
     }
     verdict_path = output_dir / f"report_{args.version}.json"
     verdict_path.write_text(json.dumps(verdict), encoding="UTF-8")

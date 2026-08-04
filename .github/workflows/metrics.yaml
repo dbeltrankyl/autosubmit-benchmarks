@@ -461,6 +461,15 @@ jobs:
           mkdir -p artifact
           unzip -o artifact.zip -d artifact
 
+      - name: Detect benchmark CPU
+        id: cpu
+        run: |
+          file=$(find artifact/data -name '*.json' | head -n1)
+          brand=$(jq -r '.machine_info.cpu.brand_raw // ""' "$file" 2>/dev/null || true)
+          slug=$(printf '%s' "$brand" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g; s/^-//; s/-$//')
+          [ -n "$slug" ] || slug=unknown-cpu
+          echo "cpu_slug=$slug" >> "$GITHUB_OUTPUT"
+
       - name: Update the benchmark-reference branch
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
@@ -473,14 +482,14 @@ jobs:
             git checkout --orphan benchmark-reference
             git rm -rf . >/dev/null 2>&1 || true
           fi
-          rm -rf .benchmarks/reference
           mkdir -p .benchmarks/reference
-          cp -r artifact/data/. .benchmarks/reference/
+          rm -rf ".benchmarks/reference/${{ steps.cpu.outputs.cpu_slug }}"
+          cp -r artifact/data/. ".benchmarks/reference/${{ steps.cpu.outputs.cpu_slug }}/"
           git add .benchmarks/reference
           if [ "${{ needs.metrics.outputs.promote_last }}" == "true" ]; then
-            label="artifact ${{ steps.latest.outputs.artifact_name }} (${{ steps.latest.outputs.run_head_sha }})"
+            label="artifact ${{ steps.latest.outputs.artifact_name }} (${{ steps.latest.outputs.run_head_sha }}) [${{ steps.cpu.outputs.cpu_slug }}]"
           else
-            label="${{ needs.metrics.outputs.version }} (${{ needs.metrics.outputs.head_sha }})"
+            label="${{ needs.metrics.outputs.version }} (${{ needs.metrics.outputs.head_sha }}) [${{ steps.cpu.outputs.cpu_slug }}]"
           fi
           git commit -m "Update benchmark baseline for ${label}" || {
             echo "No changes to commit"
