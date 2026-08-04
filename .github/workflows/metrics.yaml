@@ -323,16 +323,55 @@ jobs:
           script: |
             const fs = require('fs');
             const version = '${{ needs.metrics.outputs.version }}';
-            const summary = fs.readFileSync(`.benchmarks/artifacts/summary_${version}.md`, 'utf8');
-            const plot = fs.readFileSync(`.benchmarks/artifacts/summary_${version}.png`, { encoding: 'base64' });
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const branch = 'benchmark-reference';
+            const dir = '.benchmarks/artifacts';
+            const pngName = `summary_${version}.png`;
+            const pngPath = `${dir}/${pngName}`;
+
+            const summary = fs.readFileSync(`${dir}/summary_${version}.md`, 'utf8');
+            const pngB64 = fs.readFileSync(pngPath, { encoding: 'base64' });
+
+            // GitHub strips data: URIs from comment images, so the plot is
+            // pushed to the benchmark-reference branch and linked over https.
+            try {
+              await github.rest.git.getRef({ owner, repo, ref: `heads/${branch}` });
+            } catch (e) {
+              if (e.status !== 404) throw e;
+              const { data: info } = await github.rest.repos.get({ owner, repo });
+              const { data: head } = await github.rest.git.getRef({ owner, repo, ref: `heads/${info.default_branch}` });
+              await github.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha: head.object.sha });
+            }
+
+            let old = [];
+            try {
+              const { data } = await github.rest.repos.getContent({ owner, repo, path: dir, ref: branch });
+              old = Array.isArray(data)
+                ? data.filter(f => f.name.startsWith('summary_') && f.name.endsWith('.png') && f.name !== pngName)
+                : [];
+            } catch (e) { if (e.status !== 404) throw e; }
+            for (const f of old) {
+              await github.rest.repos.deleteFile({ owner, repo, path: `${dir}/${f.name}`,
+                message: `Remove outdated plot ${f.name}`, branch, sha: f.sha });
+            }
+
+            let existingSha;
+            try {
+              const { data } = await github.rest.repos.getContent({ owner, repo, path: pngPath, ref: branch });
+              existingSha = data.sha;
+            } catch (e) { if (e.status !== 404) throw e; }
+            await github.rest.repos.createOrUpdateFileContents({ owner, repo, path: pngPath,
+              message: `Upload benchmark plot for ${version}`, content: pngB64, branch,
+              ...(existingSha ? { sha: existingSha } : {}) });
+
             await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
+              owner, repo,
               issue_number: Number('${{ needs.metrics.outputs.issue_number }}'),
               body: [
                 `## Benchmark Results (${{ needs.metrics.outputs.test_type }})`,
                 '',
-                `![Plot Results](data:image/png;base64,${plot})`,
+                `![Plot Results](https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${pngPath})`,
                 '',
                 summary,
                 '',
