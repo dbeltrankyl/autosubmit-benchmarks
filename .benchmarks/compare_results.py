@@ -337,13 +337,32 @@ def _abbreviate_id(run_id: str) -> str:
     return run_id
 
 
+def _metric_threshold(thresholds: dict, metric: str) -> float:
+    """Return the regression threshold (%) for a metric, with a sane fallback."""
+    cfg = thresholds.get("metrics", {}).get(metric, {})
+    thr = float(cfg.get("threshold", 15.0))
+    return thr if thr > 0 else 15.0
+
+
+def _format_abs(metric: str, value: float) -> str:
+    """Format an absolute metric value for a heatmap cell without a baseline."""
+    if metric == "Time Taken(Seconds)":
+        return f"{value:.1f}s"
+    if metric == "Memory consumption(MiB)":
+        return f"{value:.0f} MiB"
+    return f"{value:.0f}"
+
+
 def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report: pd.DataFrame,
-                   version: str, output_dir: Path, cpu_label: str | None = None) -> Path:
+                   version: str, output_dir: Path, cpu_label: str | None = None,
+                   thresholds: dict | None = None) -> Path:
     """Render a delta heatmap of every scenario x metric, current vs baseline.
 
-    Cells show the percentage change against the (CPU-matched) baseline using a
-    diverging scale centered at zero (red = regression). Cells without a
-    baseline, or for metrics excluded from a test type, are left gray.
+    Hue shows the direction of change (red = regression, green = improvement)
+    and the cell opacity encodes the threshold-relative severity (``|delta| /
+    threshold``), so cells that exceed their regression guard stand out. Cells
+    without a baseline show the current absolute value; metrics excluded from a
+    test type are left blank.
     """
     import matplotlib
 
@@ -352,6 +371,7 @@ def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report:
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
 
+    thresholds = thresholds or {}
     metrics = [c for c in _PLOT_METRICS if current[c].notna().any()]
     if not metrics:
         out = output_dir / f"summary_{version}.png"
@@ -367,20 +387,52 @@ def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report:
 
     pivot = report.pivot_table(index=["test type", "ID"], columns="metric",
                                values="delta %", aggfunc="first")
-    matrix = pivot.reindex(index=order, columns=metrics).to_numpy(dtype=float)
+    delta = pivot.reindex(index=order, columns=metrics).to_numpy(dtype=float)
+
+    abs_pivot = current[metrics].copy()
+    abs_pivot["test type"] = current.index.get_level_values("test type")
+    abs_pivot["ID"] = current.index.get_level_values("ID")
+    abs_pivot = abs_pivot.set_index(["test type", "ID"])
+    absval = abs_pivot.reindex(index=order, columns=metrics).to_numpy(dtype=float)
+
+    excluded = np.zeros((len(order), len(metrics)), dtype=bool)
+    for r, (test_type, _) in enumerate(order):
+        for c, metric in enumerate(metrics):
+            excluded[r, c] = metric not in _allowed_metrics(test_type)
 
     clip = 50.0
     norm = TwoSlopeNorm(vmin=-clip, vcenter=0, vmax=clip)
-    fig, ax = plt.subplots(figsize=(7.5, max(3.5, 0.42 * len(order) + 1.5)))
-    im = ax.imshow(np.ma.masked_invalid(matrix), cmap="RdYlGn_r", norm=norm, aspect="auto")
+    cmap = plt.get_cmap("RdYlGn_r")
+    base = np.where(np.isnan(delta), 0.0, delta)
+    rgba = cmap(norm(base))
 
+    no_baseline = np.isnan(delta) & ~excluded
+    rgba[excluded, 3] = 0.0
+    rgba[no_baseline, 0:3] = [0.89, 0.89, 0.89]
+    rgba[no_baseline, 3] = 1.0
     for r in range(len(order)):
         for c in range(len(metrics)):
-            value = matrix[r, c]
-            if np.isnan(value):
+            if np.isnan(delta[r, c]) or excluded[r, c]:
                 continue
-            ax.text(c, r, f"{value:+.1f}%", ha="center", va="center", fontsize=8,
-                    color="white" if abs(value) > clip * 0.6 else "black")
+            severity = abs(delta[r, c]) / _metric_threshold(thresholds, metrics[c])
+            rgba[r, c, 3] = 0.25 + 0.75 * min(1.0, severity)
+
+    fig, ax = plt.subplots(figsize=(7.5, max(3.5, 0.42 * len(order) + 1.5)))
+    ax.imshow(rgba, aspect="auto")
+
+    for r in range(len(order)):
+        for c, metric in enumerate(metrics):
+            if excluded[r, c]:
+                continue
+            value = delta[r, c]
+            if not np.isnan(value):
+                ax.text(c, r, f"{value:+.1f}%", ha="center", va="center", fontsize=8,
+                        color="white" if abs(value) > clip * 0.6 else "black")
+            else:
+                abs_value = absval[r, c]
+                if not np.isnan(abs_value):
+                    ax.text(c, r, _format_abs(metric, abs_value), ha="center", va="center",
+                            fontsize=7, color="#555555")
 
     ax.set_yticks(range(len(order)))
     ax.set_yticklabels(labels, fontsize=7)
@@ -396,9 +448,14 @@ def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report:
     title = f"Autosubmit Performance Metrics - Version {version}"
     if cpu_label:
         title += f" · {cpu_label}"
+    if previous is None or previous.empty:
+        title += " · no baseline - absolute values"
     ax.set_title(title, fontsize=13)
-    cb = fig.colorbar(im, ax=ax, fraction=0.03, pad=0.02)
-    cb.set_label("delta % vs baseline")
+
+    sm = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cb = fig.colorbar(sm, ax=ax, fraction=0.03, pad=0.02)
+    cb.set_label("delta % vs baseline (opacity = |delta| / threshold)")
 
     fig.tight_layout()
     out = output_dir / f"summary_{version}.png"
@@ -471,7 +528,7 @@ def main() -> int:
     print(f"Saved performance comparison markdown to {markdown_path}")
 
     plot_path = render_heatmap(current_frame, previous_frame, report, args.version, output_dir,
-                               cpu_label=current_cpu or None)
+                               cpu_label=current_cpu or None, thresholds=thresholds)
     print(f"Saved performance comparison plot to {plot_path}")
 
     n_warnings = int((report["verdict"] == "WARN").sum())

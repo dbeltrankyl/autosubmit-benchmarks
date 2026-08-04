@@ -87,11 +87,15 @@ jobs:
             // (2) Users listed in MAINTAINERS.md on the default branch.
             if (!allowed) {
               try {
+                const { data: repoInfo } = await github.rest.repos.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                });
                 const { data } = await github.rest.repos.getContent({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   path: 'MAINTAINERS.md',
-                  ref: context.repository.default_branch,
+                  ref: repoInfo.default_branch,
                 });
                 const text = Buffer.from(data.content, 'base64').toString();
                 allowed = new RegExp(`@${username}\\b`).test(text);
