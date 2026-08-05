@@ -335,17 +335,6 @@ def render_markdown(report: pd.DataFrame, version: str, current_label: str,
     return "\n".join(lines)
 
 
-def _abbreviate_id(run_id: str) -> str:
-    """Shorten a scenario id like ``fc0_fc1_fc2_fc3_2_10_ftcs`` to ``4m/2c/10s·ftcs``."""
-    parts = run_id.split("_")
-    members = sum(1 for part in parts if part.startswith("fc"))
-    rest = parts[members:]
-    if len(rest) >= 2:
-        label = f"{members}m/{rest[0]}c/{rest[1]}s"
-        tail = "·".join(rest[2:])
-        return f"{label}·{tail}" if tail else label
-    return run_id
-
 
 def _metric_threshold(thresholds: dict, metric: str) -> float:
     """Return the regression threshold (%) for a metric, with a sane fallback."""
@@ -495,7 +484,7 @@ def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report:
     ax.set_yticks([r + 0.5 for r in range(len(order))], minor=True)
     ax.grid(which="minor", color="#eeeeee", lw=0.8)
     ax.set_xlim(-1.9, len(metrics) - 0.5)
-    ax.set_ylim(len(order) - 0.5, -0.5)
+    ax.set_ylim(-0.5, len(order) - 0.5)
 
     for r in range(len(order)):
         for c, metric in enumerate(metrics):
@@ -508,27 +497,25 @@ def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report:
                     fontsize=8, color=_text_color(rgba, r, c))
 
     ax.set_yticks(range(len(order)))
-    ax.set_yticklabels([_abbreviate_id(run_id) for (_, run_id) in order], fontsize=7)
+    ax.set_yticklabels([run_id for (_, run_id) in order], fontsize=7)
     ax.set_xticks(range(len(metrics)))
     ax.set_xticklabels([_SHORT_METRICS.get(m, m) for m in metrics], fontsize=9)
 
-    prev_group = None
+    prev_type = None
     for r, (test_type, _) in enumerate(order):
-        group = "run" if test_type == "run_heavy" else test_type
-        if prev_group is not None and group != prev_group:
+        if prev_type is not None and test_type != prev_type:
             ax.axhline(r - 0.5, color="gray", lw=0.9, zorder=1)
-        prev_group = group
+        prev_type = test_type
 
     groups: dict[str, list[int]] = {}
     for r, (test_type, _) in enumerate(order):
-        group = "run" if test_type == "run_heavy" else test_type
-        groups.setdefault(group, []).append(r)
+        groups.setdefault(test_type, []).append(r)
 
-    for group, rows in groups.items():
+    for test_type, rows in groups.items():
         ymid = (rows[0] + rows[-1]) / 2.0
         group_rows = rows[-1] - rows[0] + 1
         fontsize = min(12, max(7, 8 * group_rows))
-        ax.text(-1.15, ymid, group, rotation=90, ha="center", va="center",
+        ax.text(-1.15, ymid, test_type, rotation=90, ha="center", va="center",
                 fontsize=fontsize, fontweight="bold", color="#1f1f1f")
         ax.add_patch(Rectangle((-0.5, rows[0] - 0.5), len(metrics), group_rows,
                                fill=False, edgecolor="black", linewidth=1.5, zorder=2))

@@ -219,6 +219,14 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const issue_number = Number('${{ steps.pr.outputs.issue_number }}');
+            // Remove any leftover progress notices from previous runs so they
+            // never accumulate (self-heal after failed or interrupted runs).
+            const stale = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            for (const c of stale.filter((c) => c.body.startsWith('> **Benchmark status:**'))) {
+              await github.rest.issues.deleteComment({ owner, repo, comment_id: c.id });
+            }
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
             const { data } = await github.rest.issues.createComment({
               owner, repo, issue_number,
@@ -479,10 +487,10 @@ jobs:
                 owner, repo, issue_number, body,
               });
             }
-            // Remove the progress notice now that the results are in.
-            const progress = comments.find((c) => c.body.startsWith('> **Benchmark status:**'));
-            if (progress) {
-              await github.rest.issues.deleteComment({ owner, repo, comment_id: progress.id });
+            // Remove the progress notice(s) now that the results are in.
+            const progress = comments.filter((c) => c.body.startsWith('> **Benchmark status:**'));
+            for (const p of progress) {
+              await github.rest.issues.deleteComment({ owner, repo, comment_id: p.id });
             }
 
       - name: Display results (ACT)
@@ -537,6 +545,7 @@ jobs:
             core.setOutput('artifact_id', String(art.id));
             core.setOutput('artifact_name', art.name);
             core.setOutput('run_head_sha', (art.workflow_run && art.workflow_run.head_sha) || '');
+            core.setOutput('run_id', (art.workflow_run && String(art.workflow_run.id)) || '');
 
       - name: Download benchmark artifacts
         if: needs.metrics.outputs.promote_last != 'true'
@@ -547,14 +556,12 @@ jobs:
 
       - name: Download latest benchmark artifact
         if: needs.metrics.outputs.promote_last == 'true'
-        run: |
-          curl -sL \
-            -H "Authorization: Bearer ${{ github.token }}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/${{ github.repository }}/actions/artifacts/${{ steps.latest.outputs.artifact_id }}/zip" \
-            -o artifact.zip
-          mkdir -p artifact
-          unzip -o artifact.zip -d artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ steps.latest.outputs.artifact_name }}
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.latest.outputs.run_id }}
+          path: artifact
 
       - name: Verify artifact belongs to this PR
         if: needs.metrics.outputs.promote_last == 'true'

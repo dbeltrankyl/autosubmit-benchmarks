@@ -274,9 +274,8 @@ def _collect_profiler_metrics(as_exp: Any, test_type: str, run_id: str, tmp_path
 def test_autosubmit_create_profile_metrics(benchmark, tmp_path: Path, autosubmit_exp, general_data, members,
                                            chunks, splits):
     """Integration/performance test for `autosubmit create` with profiling enabled."""
-    members_name = members.replace(" ", "_")
     test_type = "create"
-    current_id = f"{members_name}_{chunks}_{splits}"
+    current_id = f"{len(members.split())}m/{chunks}c/{splits}s"
 
     yaml_data = prepare_yml(members=members, chunks=chunks, splits=splits)
     as_exp = autosubmit_exp(experiment_data=yaml_data, include_jobs=False, create=False)
@@ -294,7 +293,7 @@ def test_autosubmit_create_profile_metrics(benchmark, tmp_path: Path, autosubmit
                              pytest.param("fc0 fc1", "2", "2", 0, "run",
                                           marks=[pytest.mark.profile, pytest.mark.profilelong]),
                              pytest.param("fc0 fc1 fc2 fc3", "2", "5", 0, "run", marks=[pytest.mark.profilelong]),
-                             pytest.param("fc0 fc1 fc2 fc3", "2", "10", 0, "run", marks=[pytest.mark.profilelong]),
+                             pytest.param("fc0 fc1 fc2 fc3", "2", "10", 0, "run_heavy", marks=[pytest.mark.profilelong]),
                              pytest.param("fc0 fc1 fc2 fc3 fc4 fc5 fc6 fc7 fc8", "5", "100", 10, "run_heavy",
                                           marks=[pytest.mark.profile, pytest.mark.profilelong]),
                          ],
@@ -310,8 +309,7 @@ def test_autosubmit_create_profile_metrics(benchmark, tmp_path: Path, autosubmit
 def test_autosubmit_run_profile_metrics(benchmark, tmp_path: Path, autosubmit_exp, general_data, members, chunks,
                                         splits, max_iterations, slurm_server, test_type):
     """Integration/performance test for `autosubmit run` with profiling enabled."""
-    members_name = members.replace(" ", "_")
-    current_id = f"{members_name}_{chunks}_{splits}"
+    current_id = f"{len(members.split())}m/{chunks}c/{splits}s"
     yaml_data = prepare_yml(members=members, chunks=chunks, splits=splits)
     as_exp = autosubmit_exp(experiment_data=yaml_data, include_jobs=False, create=True)
     as_exp.as_conf.set_last_as_command('run')
@@ -344,9 +342,8 @@ def test_autosubmit_run_profile_metrics(benchmark, tmp_path: Path, autosubmit_ex
 def test_autosubmit_recovery_profile_metrics(benchmark, tmp_path: Path, autosubmit_exp, general_data, members, chunks,
                                              splits, slurm_server):
     """Integration/performance test for `autosubmit recovery` with profiling enabled."""
-    members_name = members.replace(" ", "_")
     test_type = "recovery"
-    current_id = f"{members_name}_{chunks}_{splits}"
+    current_id = f"{len(members.split())}m/{chunks}c/{splits}s"
     yaml_data = prepare_yml(members=members, chunks=chunks, splits=splits)
     as_exp = autosubmit_exp(experiment_data=yaml_data, include_jobs=False, create=True)
     as_exp.as_conf.set_last_as_command('recovery')
@@ -457,9 +454,8 @@ def test_autosubmit_setstatus_profile_metrics(benchmark, tmp_path: Path, autosub
                                               splits, slurm_server, filter_type):
     """Integration/performance test for `autosubmit setstatus` with profiling enabled."""
 
-    members_name = members.replace(" ", "_")
     test_type = "setstatus"
-    current_id = f"{members_name}_{chunks}_{splits}_{filter_type}"
+    current_id = f"{len(members.split())}m/{chunks}c/{splits}s·{filter_type}"
     yaml_data = prepare_yml(members=members, chunks=chunks, splits=splits)
     as_exp = autosubmit_exp(experiment_data=yaml_data, include_jobs=False, create=True)
     as_exp.as_conf.set_last_as_command('recovery')
