@@ -45,5 +45,5 @@ exact_metrics:
   - Total Dependencies
 
 plot:
-  delta_clip: 30.0
-  delta_tolerance: 2.5
+  delta_clip: 20.0
+  delta_tolerance: 0

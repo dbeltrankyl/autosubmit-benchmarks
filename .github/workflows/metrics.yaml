@@ -210,6 +210,22 @@ jobs:
             echo "should_run=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Post benchmark started
+        id: started
+        if: steps.scope.outputs.should_run == 'true' && !env.ACT
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const issue_number = Number('${{ steps.pr.outputs.issue_number }}');
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const { data } = await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: `> **Benchmark status:** started - [follow the run](${runUrl})`
+            });
+            core.setOutput('comment_id', String(data.id));
+
       - name: Checkout code
         if: steps.scope.outputs.should_run == 'true'
         uses: actions/checkout@v6
@@ -280,6 +296,20 @@ jobs:
             .benchmarks/data
             .benchmarks/reference
           retention-days: 7
+
+      - name: Post benchmark failed
+        if: always() && failure() && steps.started.outputs.comment_id && !env.ACT
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const comment_id = Number('${{ steps.started.outputs.comment_id }}');
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${owner}/${repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.updateComment({
+              owner, repo, comment_id,
+              body: `> **Benchmark status:** failed - [follow the run](${runUrl})`
+            });
 
   report:
     needs: metrics
@@ -409,6 +439,11 @@ jobs:
               await github.rest.issues.createComment({
                 owner, repo, issue_number, body,
               });
+            }
+            // Remove the progress notice now that the results are in.
+            const progress = comments.find((c) => c.body.startsWith('> **Benchmark status:**'));
+            if (progress) {
+              await github.rest.issues.deleteComment({ owner, repo, comment_id: progress.id });
             }
 
       - name: Display results (ACT)
