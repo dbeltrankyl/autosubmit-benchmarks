@@ -367,7 +367,7 @@ jobs:
             | { read v; echo "cpu_slug=$v" >> "$GITHUB_OUTPUT"; }
 
       - name: Upload report artifacts
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: performance-report-${{ needs.metrics.outputs.version }}
           path: .benchmarks/artifacts
