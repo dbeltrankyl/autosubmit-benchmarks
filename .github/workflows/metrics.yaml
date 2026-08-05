@@ -176,9 +176,11 @@ jobs:
       - name: Determine benchmark scope
         id: scope
         run: |
-          # Suite: quick by default, full on /metrics_full.
-          if [ "${{ github.event_name }}" == "issue_comment" ] && \
-             [[ "${{ github.event.comment.body }}" == *"/metrics_full"* ]]; then
+          # Suite: full on the PR label gate and /metrics_full, quick on /metrics.
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "test_type=profilelong" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" == "issue_comment" ] && \
+               [[ "${{ github.event.comment.body }}" == *"/metrics_full"* ]]; then
             echo "test_type=profilelong" >> "$GITHUB_OUTPUT"
           else
             echo "test_type=profile" >> "$GITHUB_OUTPUT"
@@ -436,8 +438,8 @@ jobs:
             const rest = restLines.join('\n').trim();
 
             // Resolve direct download links for the raw data and the report
-            // artifacts, falling back to the run artifacts page.
-            let dataUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}/artifacts`;
+            // artifacts, falling back to the run page.
+            let dataUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
             let reportUrl = dataUrl;
             try {
               const { data: runs } = await github.rest.actions.listWorkflowRunArtifacts({
@@ -445,13 +447,13 @@ jobs:
               });
               for (const a of (runs.artifacts || [])) {
                 if (a.name === `performance-metrics-${version}`) {
-                  dataUrl = `https://github.com/${owner}/${repo}/actions/artifacts/${a.id}`;
+                  dataUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}/artifacts/${a.id}`;
                 }
                 if (a.name === `performance-report-${version}`) {
-                  reportUrl = `https://github.com/${owner}/${repo}/actions/artifacts/${a.id}`;
+                  reportUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}/artifacts/${a.id}`;
                 }
               }
-            } catch (e) { /* keep the run artifacts page as fallback */ }
+            } catch (e) { /* keep the run page as fallback */ }
 
             const body = [
               `## Benchmark Results (${{ needs.metrics.outputs.test_type }})`,

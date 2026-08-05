@@ -425,8 +425,9 @@ def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report:
     for test_type in current.index.get_level_values("test type").unique():
         if test_type not in test_types:
             continue
-        for run_id in current.xs(test_type, level="test type").index:
-            order.append((test_type, run_id))
+        mask = current.index.get_level_values("test type") == test_type
+        rows = current.loc[mask].sort_values("Time Taken(Seconds)", ascending=True)
+        order.extend((test_type, run_id) for run_id in rows.index.get_level_values("ID"))
 
     if not metrics or not order:
         return None
