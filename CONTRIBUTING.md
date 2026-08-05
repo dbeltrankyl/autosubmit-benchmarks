@@ -275,6 +275,26 @@ annotated with the current value; within each group rows are ordered from
 fastest to slowest. Without a baseline, cells are neutral and only show the
 values.
 
+### Adding scenarios or metrics
+
+New parametrizations of an existing command (`create`, `run`, `recovery`,
+`setstatus`) are picked up automatically: they appear as a new row in the
+corresponding plot, ordered by time within their group.
+
+A new **test type** (e.g. a new command being benchmarked) or a new **metric**
+needs a small change in `.benchmarks/compare_results.py`:
+
+* **Test type**: add it to `_RUN_TEST_TYPES` (carries the profiler growth
+  metrics) or `_OTHER_TEST_TYPES` (time/memory/DB metrics), or add a new plot
+  entry in `render_heatmaps()`. If the new type should not carry the growth
+  metrics (`FD GROW`, `MEM GROW`, `OBJ GROW`), also add it to
+  `_NO_GROW_TEST_TYPES`.
+* **Metric**: add it to `METRIC_COLUMNS` so `build_frame()` stores it (and it
+  shows up in the markdown tables), then to the matching plot metric list
+  (`_RUN_PLOT_METRICS` or `_OTHER_PLOT_METRICS`) so the plot renders it. The
+  test must write it into `benchmark.extra_info` (see
+  `_collect_profiler_metrics` in `test/integration/commands/test_performance.py`).
+
 ## Test GitHub Actions locally
 
 Prerequisites: `docker`, `act` and a GitHub token.

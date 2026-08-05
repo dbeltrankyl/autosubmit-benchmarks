@@ -211,10 +211,8 @@ def _collect_profiler_metrics(as_exp: Any, test_type: str, run_id: str, tmp_path
     total_dependencies = len(job_list.graph.edges)
     total_jobs = len(job_list.graph.nodes)
 
-    memory_consumption = _find(r"FINAL MEMORY: (\d+\.\d+) MiB\.", text)
-    if not memory_consumption:
-        memory_consumption = _find(r"FINAL MEMORY: (\d+\.\d+) GiB\.", text)
-        memory_consumption = float(memory_consumption) * 1024 if memory_consumption else None
+    memory_match = re.search(r"FINAL MEMORY: (\d+\.\d+) ([A-Za-z]+)\.", text)
+    memory_consumption = _to_mib(memory_match.group(1), memory_match.group(2)) if memory_match else None
 
     # Disk usage (sqlite only for now)
     db_path = Path(tmp_path / as_exp.expid / "db" / "job_list.db")
