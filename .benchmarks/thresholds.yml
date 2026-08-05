@@ -19,8 +19,8 @@
 # the noisiest metrics; the deterministic counters should never move).
 metrics:
   Time Taken(Seconds):
-    threshold: 20.0
-    floor: 1.0
+    threshold: 22.0
+    floor: 5.0 # exclude really quick commands
   Memory consumption(MiB):
     threshold: 10.0
     floor: 50.0

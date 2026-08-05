@@ -512,21 +512,23 @@ def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report:
     ax.set_xticks(range(len(metrics)))
     ax.set_xticklabels([_SHORT_METRICS.get(m, m) for m in metrics], fontsize=9)
 
-    prev_type = None
+    prev_group = None
     for r, (test_type, _) in enumerate(order):
-        if prev_type is not None and test_type != prev_type:
+        group = "run" if test_type == "run_heavy" else test_type
+        if prev_group is not None and group != prev_group:
             ax.axhline(r - 0.5, color="gray", lw=0.9, zorder=1)
-        prev_type = test_type
+        prev_group = group
 
     groups: dict[str, list[int]] = {}
     for r, (test_type, _) in enumerate(order):
-        groups.setdefault(test_type, []).append(r)
+        group = "run" if test_type == "run_heavy" else test_type
+        groups.setdefault(group, []).append(r)
 
-    for test_type, rows in groups.items():
+    for group, rows in groups.items():
         ymid = (rows[0] + rows[-1]) / 2.0
         group_rows = rows[-1] - rows[0] + 1
         fontsize = min(12, max(7, 8 * group_rows))
-        ax.text(-1.15, ymid, test_type, rotation=90, ha="center", va="center",
+        ax.text(-1.15, ymid, group, rotation=90, ha="center", va="center",
                 fontsize=fontsize, fontweight="bold", color="#1f1f1f")
         ax.add_patch(Rectangle((-0.5, rows[0] - 0.5), len(metrics), group_rows,
                                fill=False, edgecolor="black", linewidth=1.5, zorder=2))
@@ -547,15 +549,7 @@ def render_heatmap(current: pd.DataFrame, previous: pd.DataFrame | None, report:
         cb.set_ticks(ticks)
         cb.set_ticklabels([f"{v:g}" for v in ticks])
 
-    if absolute_mode:
-        caption = "Cells = current values. Units: Time (s), Memory (MiB), DB sizes (KiB)."
-    else:
-        caption = (f"Cells = current values. Color = Δ% vs baseline "
-                   f"(|Δ| < {tolerance:g}% neutral gray). "
-                   "Units: Time (s), Memory (MiB), DB sizes (KiB).")
-    fig.text(0.5, 0.012, caption, ha="center", fontsize=8, color="#555555")
-
-    fig.tight_layout(rect=[0, 0.04, 1, 1])
+    fig.tight_layout()
     out = output_dir / (out_name or f"summary_{version}.png")
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=110, bbox_inches="tight")

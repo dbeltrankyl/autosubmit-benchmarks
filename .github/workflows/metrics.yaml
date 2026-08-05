@@ -289,7 +289,7 @@ jobs:
 
       - name: Upload benchmark artifacts
         if: steps.scope.outputs.should_run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: performance-metrics-${{ steps.as_version.outputs.version }}
           path: |
@@ -319,6 +319,7 @@ jobs:
     outputs:
       regressions_detected: ${{ steps.verdict.outputs.regressions_detected }}
       force_promote: ${{ needs.metrics.outputs.force_promote }}
+      cpu_slug: ${{ steps.verdict.outputs.cpu_slug }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -339,7 +340,7 @@ jobs:
           pip install -e .[all]
 
       - name: Download benchmark artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: performance-metrics-${{ needs.metrics.outputs.version }}
           path: .benchmarks
@@ -361,6 +362,16 @@ jobs:
           jq -r '.regressions_detected' \
             .benchmarks/artifacts/report_${{ needs.metrics.outputs.version }}.json \
             | { read v; echo "regressions_detected=$v" >> "$GITHUB_OUTPUT"; }
+          jq -r '.cpu_slug' \
+            .benchmarks/artifacts/report_${{ needs.metrics.outputs.version }}.json \
+            | { read v; echo "cpu_slug=$v" >> "$GITHUB_OUTPUT"; }
+
+      - name: Upload report artifacts
+        uses: actions/upload-artifact@v8
+        with:
+          name: performance-report-${{ needs.metrics.outputs.version }}
+          path: .benchmarks/artifacts
+          retention-days: 7
 
       - name: Comment results
         uses: actions/github-script@v8
@@ -413,6 +424,27 @@ jobs:
                 ...(existingSha ? { sha: existingSha } : {}) });
             }
 
+            const [titleLine, ...restLines] = summary.split('\n');
+            const rest = restLines.join('\n').trim();
+
+            // Resolve direct download links for the raw data and the report
+            // artifacts, falling back to the run artifacts page.
+            let dataUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}/artifacts`;
+            let reportUrl = dataUrl;
+            try {
+              const { data: runs } = await github.rest.actions.listWorkflowRunArtifacts({
+                owner, repo, run_id: context.runId,
+              });
+              for (const a of (runs.artifacts || [])) {
+                if (a.name === `performance-metrics-${version}`) {
+                  dataUrl = `https://github.com/${owner}/${repo}/actions/artifacts/${a.id}`;
+                }
+                if (a.name === `performance-report-${version}`) {
+                  reportUrl = `https://github.com/${owner}/${repo}/actions/artifacts/${a.id}`;
+                }
+              }
+            } catch (e) { /* keep the run artifacts page as fallback */ }
+
             const body = [
               `## Benchmark Results (${{ needs.metrics.outputs.test_type }})`,
               '',
@@ -420,9 +452,16 @@ jobs:
               '',
               `![Create / Recovery / Setstatus](https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${dir}/${plotNames[1]})`,
               '',
-              summary,
+              titleLine,
               '',
-              'Artifacts: see the workflow run summary for download.'
+              '<details>',
+              '<summary>Click to expand — regressions and scenario tables</summary>',
+              '',
+              rest,
+              '',
+              '</details>',
+              '',
+              `[Download benchmark data](${dataUrl}) · [Download report (md, plots, json)](${reportUrl})`
             ].join('\n');
             const issue_number = Number('${{ needs.metrics.outputs.issue_number }}');
             // Update the existing benchmark comment in place so every run edits
@@ -501,7 +540,7 @@ jobs:
 
       - name: Download benchmark artifacts
         if: needs.metrics.outputs.promote_last != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: performance-metrics-${{ needs.metrics.outputs.version }}
           path: artifact
@@ -517,13 +556,31 @@ jobs:
           mkdir -p artifact
           unzip -o artifact.zip -d artifact
 
+      - name: Verify artifact belongs to this PR
+        if: needs.metrics.outputs.promote_last == 'true'
+        run: |
+          file=$(find artifact/data -name '*.json' | head -n1)
+          short_expected=$(echo '${{ needs.metrics.outputs.head_sha }}' | cut -c1-7)
+          base=$(basename "$file")
+          if [[ "$base" != *"$short_expected"* ]]; then
+            echo "::error::Last benchmark artifact ($base) is not from the current PR head ($short_expected). Re-run /metrics (or /metrics_full) before /metrics_promote."
+            exit 1
+          fi
+          echo "Promoting artifact $base (matches PR head $short_expected)"
+
       - name: Detect benchmark CPU
         id: cpu
         run: |
-          file=$(find artifact/data -name '*.json' | head -n1)
-          brand=$(jq -r '.machine_info.cpu.brand_raw // ""' "$file" 2>/dev/null || true)
-          slug=$(printf '%s' "$brand" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g; s/^-//; s/-$//')
-          [ -n "$slug" ] || slug=unknown-cpu
+          # Prefer the CPU detected by the report job (single source of
+          # truth). Fall back to reading the artifact only for /metrics_promote,
+          # where the report job is skipped.
+          slug="${{ needs.report.outputs.cpu_slug }}"
+          if [ -z "$slug" ]; then
+            file=$(find artifact/data -name '*.json' | head -n1)
+            brand=$(jq -r '.machine_info.cpu.brand_raw // ""' "$file" 2>/dev/null || true)
+            slug=$(printf '%s' "$brand" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\+/-/g; s/^-//; s/-$//')
+            [ -n "$slug" ] || slug=unknown-cpu
+          fi
           echo "cpu_slug=$slug" >> "$GITHUB_OUTPUT"
 
       - name: Update the benchmark-reference branch
