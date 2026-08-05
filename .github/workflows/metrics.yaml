@@ -383,21 +383,33 @@ jobs:
                 ...(existingSha ? { sha: existingSha } : {}) });
             }
 
-            await github.rest.issues.createComment({
-              owner, repo,
-              issue_number: Number('${{ needs.metrics.outputs.issue_number }}'),
-              body: [
-                `## Benchmark Results (${{ needs.metrics.outputs.test_type }})`,
-                '',
-                `![Run scenarios](https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${dir}/${plotNames[0]})`,
-                '',
-                `![Create / Recovery / Setstatus](https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${dir}/${plotNames[1]})`,
-                '',
-                summary,
-                '',
-                'Artifacts: see the workflow run summary for download.'
-              ].join('\n')
+            const body = [
+              `## Benchmark Results (${{ needs.metrics.outputs.test_type }})`,
+              '',
+              `![Run scenarios](https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${dir}/${plotNames[0]})`,
+              '',
+              `![Create / Recovery / Setstatus](https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${dir}/${plotNames[1]})`,
+              '',
+              summary,
+              '',
+              'Artifacts: see the workflow run summary for download.'
+            ].join('\n');
+            const issue_number = Number('${{ needs.metrics.outputs.issue_number }}');
+            // Update the existing benchmark comment in place so every run edits
+            // the first one instead of posting duplicates.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
             });
+            const existing = comments.find((c) => c.body.startsWith('## Benchmark Results'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner, repo, comment_id: existing.id, body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number, body,
+              });
+            }
 
       - name: Display results (ACT)
         if: ${{ env.ACT }}
