@@ -7,8 +7,11 @@ name: metrics
 #   * PR gate: on every pull_request the `metrics` job runs as a REQUIRED
 #     status check. It is a cheap no-op unless the PR has the
 #     `perf-benchmark` label (which needs write/triage access to add), in which
-#     case it benchmarks the PR against the baseline and greys the merge button
-#     until the benchmark completes.
+#     case it runs the FULL suite (`profilelong`) against the baseline and greys
+#     the merge button until the check completes. While the label is on, every
+#     push triggers a full run (~20 min) and the `benchmark` concurrency group
+#     serializes them, so remove the label once the check passes to avoid
+#     queueing extra runs.
 #   * Manual: a maintainer (member of the BSC-ES/autosubmit team, or listed in
 #     MAINTAINERS.md on the default branch) comments on a PR:
 #       - `/metrics`          quick suite
@@ -544,7 +547,6 @@ jobs:
               .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
             if (!candidates.length) throw new Error('No benchmark artifact found to promote. Run /metrics first.');
             const art = candidates[0];
-            core.setOutput('artifact_id', String(art.id));
             core.setOutput('artifact_name', art.name);
             core.setOutput('run_head_sha', (art.workflow_run && art.workflow_run.head_sha) || '');
             core.setOutput('run_id', (art.workflow_run && String(art.workflow_run.id)) || '');

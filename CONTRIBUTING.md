@@ -180,45 +180,47 @@ never promoted).
 
 * **PR gate (required status check)**: the `metrics` workflow runs on every
   pull request. It is a cheap no-op unless the PR carries the `perf-benchmark`
-  label, in which case the PR is benchmarked against the baseline and the merge
-  button stays disabled until the benchmark completes. Add the label to PRs
-  that may affect runtime performance (requires write/triage access; if you
-  cannot add labels, say so in the PR description so a maintainer can). See
-  the PR template and the "Set up the merge gate" note below.
+  label, in which case it runs the full suite (`profilelong`) against the
+  baseline and the merge button stays disabled until the benchmark completes.
+  While the label is on, every push triggers a full run and the `benchmark`
+  concurrency group serializes them, so remove the label once the check passes.
+  Add the label to PRs that may affect runtime performance (requires write/triage
+  access; if you cannot add labels, say so in the PR description so a maintainer
+  can). See the PR template and the "Set up the merge gate" note below.
 * **Manually**: a member of the `BSC-ES/autosubmit` team (or a user listed as
   `@username` in this repository's `MAINTAINERS.md` on the default branch)
   comments on a PR:
   * `/metrics` — quick suite
   * `/metrics_full` — full suite
   * `/metrics_promote` — promote the last completed run as the new baseline. Run `/metrics` (or `/metrics_full`) first, then `/metrics_promote`
-    to re-baseline that result.
+    to re-baseline that result. The run being promoted must match the current PR
+    head: if you pushed after the last benchmark, re-run `/metrics` (or
+    `/metrics_full`) first.
 
-> NOTE: the `/metrics*` commands execute the workflow from the **default
-> branch** (GitHub runs `issue_comment` workflows from the default branch), so
-> workflow changes only take effect for comments once they land on `master`.
 
 The PR results are posted as a comment comparing them against the baseline,
-flagging regressions beyond the configured thresholds as warnings. Two
-comparison plots are stored on the `benchmark-reference` branch and linked from
-the comment (GitHub strips `data:` image URIs, so plots are not embedded
-inline): one for the `run`/`run_heavy` scenarios (which carry the profiler
-growth metrics) and one for `create`/`recovery`/`setstatus`. Only the latest
-plots are kept.
+flagging regressions beyond the configured thresholds as warnings. Only the
+plots are visible at first glance; the regressions and scenario tables are
+collapsed in a `<details>` block. Two comparison plots are stored on the
+`benchmark-reference` branch and linked from the comment (GitHub strips `data:`
+image URIs, so plots are not embedded inline): one for the `run`/`run_heavy`
+scenarios (which carry the profiler growth metrics) and one for
+`create`/`recovery`/`setstatus`. The comment also links the run's artifacts for
+direct download (raw benchmark data and the report with markdown, plots and
+JSON). Only the latest plots are kept.
 
-### The baseline
+### The baselines
 
-The baseline lives on the `benchmark-reference` branch (`.benchmarks/reference`),
+The baselines live on the `benchmark-reference` branch (`.benchmarks/reference`),
 and every promotion is a commit, so its history is preserved.
 
 Baselines are stored **per CPU model**:
 `.benchmarks/reference/<cpu-slug>/` where the slug derives from the runner's
 CPU (`machine_info.cpu.brand_raw`, e.g. `intel-r-xeon-r-platinum-8370c-cpu-2-80ghz`).
-GitHub-hosted runners do not guarantee a fixed CPU (the fleet mixes Intel and
-AMD parts), so a run is only compared against the baseline of the same CPU;
+GitHub-hosted runners do not guarantee a fixed CPU, so a run is only compared against the baseline of the same CPU;
 results across different CPUs are not comparable. Baselines fill lazily: the
 first run on a given CPU establishes that CPU's baseline (reported as "no
-baseline yet"), and later runs on the same CPU are compared against it. There is
-no way to pre-seed a CPU you have never run on.
+baseline yet"), and later runs on the same CPU are compared against it.
 
 To restore a previous baseline after a bad merge:
 
@@ -229,7 +231,7 @@ git commit -m "Restore baseline before merge <merge-sha>"
 git push origin HEAD:benchmark-reference
 ```
 
-### Set up the merge gate (one-time, repo admin)
+### Set up the merge gate
 
 1. Create the `perf-benchmark` label (Settings > Labels).
 2. In branch protection for the default branch, enable **Require status
@@ -264,12 +266,14 @@ $ python .benchmarks/compare_results.py \
 ```
 
 The report is written to `.benchmarks/artifacts/summary_<version>.md` and the
-two grid plots (one per scenario group, `run` and `create/recovery/setstatus`) to
-`summary_<version>_run.png` and `summary_<version>_create_recovery_setstatus.png`. Cells are colored
-red/blue by change direction (with a neutral dead zone for |delta| below
+two grid plots (one per scenario group, `run`/`run_heavy` and
+`create`/`recovery`/`setstatus`) to `summary_<version>_run.png` and
+`summary_<version>_create_recovery_setstatus.png`. Cells are colored red/blue by
+change direction (with a neutral dead zone for |delta| below
 `plot.delta_tolerance`, configurable in `.benchmarks/thresholds.yml`) and
-annotated with the current value; rows are grouped by test type. Without a
-baseline, cells are neutral and only show the values.
+annotated with the current value; within each group rows are ordered from
+fastest to slowest. Without a baseline, cells are neutral and only show the
+values.
 
 ## Test GitHub Actions locally
 
@@ -298,14 +302,6 @@ $ act -j metrics -P ubuntu-latest=ghcr.io/catthehacker/ubuntu:act-latest -e even
 ```
 replace `metrics` with the name of the job you want to run (`authorize`,
 `metrics`, `report`, `update-baseline`).
-
-> NOTE: `act` runs the workflow file from your working tree, so it can validate
-> workflow changes before they are merged. Under `act` the authorization gate
-> is bypassed (the org-level APIs are not reachable) and the results are
-> printed to the console instead of posting a PR comment. The `run`,
-> `recovery` and `setstatus` benchmark scenarios start a Slurm container via
-> testcontainers, which requires Docker-in-Docker; use `-k create` in the
-> benchmark step (or run those scenarios locally with `pytest`) to avoid it.
 
 For debugging purposes, you can also enter the container where the job is
 being executed with:
